@@ -1,0 +1,30 @@
+<!doctype html>
+<!-- Throwaway preview of the buy/sell pin shape. Open in a browser. Delete anytime. -->
+<html><body style="background:#1a1d23;margin:0">
+<canvas id="c" width="300" height="300"></canvas>
+<script>
+const HEAD_RADIUS=11, HOLE_RADIUS=4.5, TAIL_LEN=HEAD_RADIUS*2.6, TIP_GAP=1
+function drawPin(ctx,x,yPrice,color,pointsUp){
+  const dir=pointsUp?-1:1
+  const tipY=yPrice+dir*-TIP_GAP
+  const headCY=tipY+dir*TAIL_LEN
+  ctx.save();ctx.fillStyle=color;ctx.strokeStyle='#fff';ctx.lineWidth=1.5;ctx.lineJoin='round'
+  const d=TAIL_LEN
+  const axis=dir<0?Math.PI/2:-Math.PI/2
+  const phi=Math.acos(HEAD_RADIUS/d)
+  const cLeft=axis-phi,cRight=axis+phi
+  ctx.beginPath();ctx.moveTo(x,tipY)
+  ctx.lineTo(x+HEAD_RADIUS*Math.cos(cLeft),headCY+HEAD_RADIUS*Math.sin(cLeft))
+  ctx.arc(x,headCY,HEAD_RADIUS,cLeft,cRight,dir<0)
+  ctx.lineTo(x,tipY)
+  ctx.closePath();ctx.fill();ctx.stroke()
+  ctx.beginPath();ctx.arc(x,headCY,HOLE_RADIUS,0,Math.PI*2);ctx.fillStyle='#fff';ctx.fill()
+  ctx.restore()
+}
+const ctx=document.getElementById('c').getContext('2d')
+// sell (red) above price line, buy (green) below price line
+ctx.strokeStyle='#555';ctx.beginPath();ctx.moveTo(0,150);ctx.lineTo(300,150);ctx.stroke()
+drawPin(ctx,90,150,'#f44336',true)    // sell, points down at price
+drawPin(ctx,200,150,'#00c853',true)   // buy, points down at price
+</script>
+</body></html>
