@@ -1,12 +1,4 @@
-/**
- * Custom series primitive that highlights the dates where orders executed by
- * drawing a colour-coded marker band just above the time axis at each bar:
- *   blue  = both a buy and a sell that day
- *   green = buy(s) only
- *   red   = sell(s) only
- * Mirrors the _tick_color logic in the matplotlib reference. Lightweight Charts
- * has no per-tick label colour API, so the band is painted on the canvas.
- */
+
 import type {
   ISeriesPrimitive,
   ISeriesPrimitivePaneView,
@@ -21,9 +13,9 @@ export interface ExecDateMark {
   color: string
 }
 
-const BAND_HEIGHT = 6 // px
-const BAND_WIDTH = 11 // px — width of the solid bottom band over the date
-const COLUMN_ALPHA = 0.10 // faint full-height column tint
+const BAND_HEIGHT = 6
+const BAND_WIDTH = 11
+const COLUMN_ALPHA = 0.10
 
 interface MediaScope {
   context: CanvasRenderingContext2D
@@ -50,10 +42,10 @@ class ExecDateHighlightRenderer implements ISeriesPrimitivePaneRenderer {
       for (const m of this._marks) {
         const x = timeScale.timeToCoordinate(m.time as Time)
         if (x == null) continue
-        // faint full-height column so the exec day is visible on the chart
+
         ctx.fillStyle = hexToRgba(m.color, COLUMN_ALPHA)
         ctx.fillRect(x - BAND_WIDTH / 2, 0, BAND_WIDTH, h)
-        // solid block at the bottom edge, right over the date label
+
         ctx.fillStyle = m.color
         ctx.fillRect(x - BAND_WIDTH / 2, h - BAND_HEIGHT, BAND_WIDTH, BAND_HEIGHT)
       }

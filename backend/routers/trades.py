@@ -9,16 +9,14 @@ from ..prefetch import prefetch_session, get_prefetch_status
 
 router = APIRouter(prefix="/trades", tags=["trades"])
 
-
 @router.post("/upload")
 async def upload_trades(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     suffix: str = Query(".SR", description="Exchange suffix for prefetch"),
 ):
-    """Upload a CSV trade file. Returns session_id; triggers background chart prefetch."""
-    if not file.filename or not file.filename.lower().endswith(".csv"):
-        raise HTTPException(status_code=400, detail="Only CSV files are supported")
+    if not file.filename or not file.filename.lower().endswith((".csv", ".xlsx", ".xlsm")):
+        raise HTTPException(status_code=400, detail="Only CSV or XLSX files are supported")
 
     content = await file.read()
     try:
@@ -44,15 +42,12 @@ async def upload_trades(
         "symbols": symbols,
     }
 
-
 @router.get("/sessions")
 async def get_sessions():
     return list_sessions()
 
-
 @router.get("/sessions/{session_id}/prefetch-status")
 async def prefetch_status(session_id: str):
-    """Poll background prefetch progress. Returns {total, cached, failed, done}."""
     status = get_prefetch_status(session_id)
     if status is None:
         return {"total": 0, "cached": 0, "failed": 0, "done": True,
@@ -67,10 +62,8 @@ async def prefetch_status(session_id: str):
         "verifying": status["verifying"],
     }
 
-
 @router.get("/sessions/{session_id}")
 async def load_session(session_id: str):
-    """Load a persisted session by ID (restores from DB if needed)."""
     session = get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -89,7 +82,6 @@ async def load_session(session_id: str):
         "symbols": symbols,
     }
 
-
 @router.delete("/sessions/{session_id}")
 async def remove_session(session_id: str):
     if not delete_session(session_id):
@@ -97,7 +89,6 @@ async def remove_session(session_id: str):
     invalidate_charts_for_session(session_id)
     invalidate_analytics_for_session(session_id)
     return {"deleted": session_id}
-
 
 @router.get("/sessions/{session_id}/trades")
 async def list_trades(
@@ -111,8 +102,6 @@ async def list_trades(
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    # Parse the optional execution-date window. A trade is kept if ANY of its
-    # order executions falls within [from_date, to_date] inclusive.
     from datetime import datetime
     range_from = range_to = None
     try:

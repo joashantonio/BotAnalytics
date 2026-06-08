@@ -56,9 +56,19 @@ export const api = {
     symbol: string,
     tradeId: string,
     suffix = '.SR',
+    mode: 'psar' | 'ma10' | 'ma200' = 'psar',
+    fromDate?: string,
+    toDate?: string,
   ): Promise<ChartData> => {
     const cleanSuffix = suffix.trim()
-    return req(`/symbols/${sessionId}/${symbol}/chart?trade_id=${encodeURIComponent(tradeId)}&suffix=${encodeURIComponent(cleanSuffix)}`)
+    const qs = new URLSearchParams({
+      trade_id: tradeId,
+      suffix: cleanSuffix,
+      mode,
+    })
+    if (fromDate) qs.set('from_date', fromDate)
+    if (toDate) qs.set('to_date', toDate)
+    return req(`/symbols/${sessionId}/${symbol}/chart?${qs.toString()}`)
   },
 
   getSymbolAnalytics: (
@@ -76,8 +86,9 @@ export const api = {
     suffix = '.SR',
     fromDate?: string,
     toDate?: string,
+    mode: 'psar' | 'ma10' | 'ma200' = 'psar',
   ): Promise<CorrectExecutions> => {
-    const qs = new URLSearchParams({ suffix: suffix.trim() })
+    const qs = new URLSearchParams({ suffix: suffix.trim(), mode })
     if (fromDate) qs.set('from_date', fromDate)
     if (toDate) qs.set('to_date', toDate)
     return req(`/symbols/${sessionId}/analytics/correct-executions?${qs.toString()}`)

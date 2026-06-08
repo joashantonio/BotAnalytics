@@ -24,13 +24,15 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
     onEnter(session, suffix)
   }, [session, suffix, onEnter])
 
-  // ── Correct Executions (PSAR-trend correctness, optional date range) ──────────
+  // ── Correct Executions (indicator-trend correctness, optional date range) ─────
   const [fromDate, setFromDate] = useState(
     () => lsGet(ceDateKey(session?.session_id, 'from')) ?? '',
   )
   const [toDate, setToDate] = useState(
     () => lsGet(ceDateKey(session?.session_id, 'to')) ?? '',
   )
+  // Indicator the correctness check is scored against: PSAR trend, or MA10/MA200 cross.
+  const [ceMode, setCeMode] = useState<'psar' | 'ma10' | 'ma200'>('psar')
   const [ce, setCe] = useState<CorrectExecutions | null>(null)
   const [ceLoading, setCeLoading] = useState(false)
   const [ceError, setCeError] = useState<string | null>(null)
@@ -69,7 +71,7 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
     lsSet(ceDateKey(session?.session_id, 'to'), toDate || null)
   }, [fromDate, toDate, session?.session_id])
 
-  // auto-compute whenever the session, suffix, or date range changes
+  // auto-compute whenever the session, suffix, indicator mode, or date range changes
   useEffect(() => {
     if (!session) return
     let cancelled = false
@@ -81,6 +83,7 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
         suffix,
         fromDate || undefined,
         toDate || undefined,
+        ceMode,
       )
       .then((data) => {
         if (!cancelled) setCe(data)
@@ -96,7 +99,7 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
     return () => {
       cancelled = true
     }
-  }, [session, suffix, fromDate, toDate])
+  }, [session, suffix, ceMode, fromDate, toDate])
 
   if (!session) {
     return (
@@ -123,15 +126,58 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
         {analytics && <AnalyticsDashboard analytics={analytics} showSymbolBreakdown={false} />}
       </div>
 
-      {/* Correct Executions */}
       <div>
         <h2 className="text-lg font-semibold text-white mb-1">Executions</h2>
         <p className="text-xs text-slate-400 mb-4">
-          A buy is “correct” when its execution date falls in a PSAR downtrend; a sell when it
-          falls in an uptrend. Optionally restrict to executions within a date range.
+          {ceMode === 'psar' ? (
+            <>A buy is “correct” when its execution date falls in a PSAR downtrend; a sell when it
+            falls in an uptrend.</>
+          ) : ceMode === 'ma10' ? (
+            <>A buy is “correct” when its execution closes below the MA10; a sell when it closes
+            above the MA10.</>
+          ) : (
+            <>A buy is “correct” when its execution closes below the MA200; a sell when it closes
+            above the MA200.</>
+          )}
+          {' '}Optionally restrict to executions within a date range.
         </p>
 
         <div className="flex flex-wrap items-end gap-3 mb-4">
+          <div className="flex flex-col gap-1 text-xs text-slate-400">
+            Indicator
+            <div className="flex rounded border border-border overflow-hidden text-xs">
+              <button
+                onClick={() => setCeMode('psar')}
+                className={`px-3 py-1.5 transition-colors ${
+                  ceMode === 'psar'
+                    ? 'bg-accent/20 text-accent font-medium'
+                    : 'bg-surface text-slate-400 hover:text-white'
+                }`}
+              >
+                PSAR
+              </button>
+              <button
+                onClick={() => setCeMode('ma10')}
+                className={`px-3 py-1.5 transition-colors border-l border-border ${
+                  ceMode === 'ma10'
+                    ? 'bg-accent/20 text-accent font-medium'
+                    : 'bg-surface text-slate-400 hover:text-white'
+                }`}
+              >
+                MA10
+              </button>
+              <button
+                onClick={() => setCeMode('ma200')}
+                className={`px-3 py-1.5 transition-colors border-l border-border ${
+                  ceMode === 'ma200'
+                    ? 'bg-accent/20 text-accent font-medium'
+                    : 'bg-surface text-slate-400 hover:text-white'
+                }`}
+              >
+                MA200
+              </button>
+            </div>
+          </div>
           <label className="flex flex-col gap-1 text-xs text-slate-400">
             From
             <input
@@ -213,8 +259,8 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
                   Quartile of Correct Executions
                 </h3>
                 <p className="text-xs text-slate-500 mb-2">
-                  Where each correct execution landed inside its PSAR trend block (Q1 = lowest
-                  price band, Q4 = highest).
+                  Where each correct execution landed inside its {ceMode === 'psar' ? 'PSAR' : ceMode === 'ma10' ? 'MA10' : 'MA200'} trend
+                  block (Q1 = lowest price band, Q4 = highest).
                 </p>
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">

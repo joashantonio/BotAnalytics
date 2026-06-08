@@ -4,6 +4,7 @@ from collections import defaultdict
 from datetime import datetime
 from typing import BinaryIO
 
+import pandas as pd
 
 def _parse_csv_rows(content: bytes) -> tuple[list[str], list[dict]]:
     text = content.decode("utf-8-sig")
@@ -12,13 +13,71 @@ def _parse_csv_rows(content: bytes) -> tuple[list[str], list[dict]]:
     rows = list(reader)
     return list(fieldnames), rows
 
+def _parse_xlsx_rows(content: bytes) -> tuple[list[str], list[dict]]:
+    df = pd.read_excel(io.BytesIO(content), sheet_name=0, dtype=str)
+    df = df.where(pd.notna(df), None)
+    fieldnames = list(df.columns)
+    rows = [
+        {col: ("" if val is None else str(val).strip()) for col, val in row.items()}
+        for row in df.to_dict(orient="records")
+    ]
+    return fieldnames, rows
+
+_BOX_LEVEL_COLUMNS = {
+    "Upper": "upper",
+    "Lower": "lower",
+    "Middle": "middle",
+    "Range": "range",
+    "Quartile Step": "quartile_step",
+    "First Quartile": "first_quartile",
+    "Second Quartile": "second_quartile",
+    "Third Quartile": "third_quartile",
+    "Fourth Quartile": "fourth_quartile",
+}
+
+def _parse_xlsx_box_levels(content: bytes) -> dict[str, dict]:
+    levels_by_trade: dict[str, dict] = {}
+    try:
+        xl = pd.ExcelFile(io.BytesIO(content))
+    except Exception:
+        return levels_by_trade
+
+    for sheet_name in xl.sheet_names:
+        if sheet_name not in xl.sheet_names or not sheet_name.strip().isdigit():
+            continue
+        try:
+            df = xl.parse(sheet_name, dtype=str)
+        except Exception:
+            continue
+        if "Upper" not in df.columns or "Lower" not in df.columns:
+            continue
+
+        for _, row in df.iterrows():
+            upper_raw = row.get("Upper")
+            lower_raw = row.get("Lower")
+            if upper_raw is None or lower_raw is None or pd.isna(upper_raw) or pd.isna(lower_raw):
+                continue
+            try:
+                levels = {dest: float(row[col]) for col, dest in _BOX_LEVEL_COLUMNS.items()}
+            except (TypeError, ValueError):
+                continue
+            levels_by_trade[sheet_name.strip()] = levels
+            break
+
+    return levels_by_trade
+
+def _is_xlsx(content: bytes, source_name: str) -> bool:
+    if source_name.lower().endswith((".xlsx", ".xlsm")):
+        return True
+    return content[:4] == b"PK\x03\x04"
 
 def parse_trades(content: bytes, source_name: str = "upload") -> dict[tuple, dict]:
-    """
-    Parse CSV bytes. Returns all trades keyed by (trade_id, symbol).
-    Each value: {trade_id, symbol, entry_date, exit_date|None, orders, status, buy_qty, sell_qty}
-    """
-    fieldnames, rows = _parse_csv_rows(content)
+    box_levels_by_trade: dict[str, dict] = {}
+    if _is_xlsx(content, source_name):
+        fieldnames, rows = _parse_xlsx_rows(content)
+        box_levels_by_trade = _parse_xlsx_box_levels(content)
+    else:
+        fieldnames, rows = _parse_csv_rows(content)
 
     required = {"Trade", "Symbol", "Side", "Quantity", "Execution Price", "Execution Date"}
     missing = required - set(fieldnames)
@@ -77,13 +136,12 @@ def parse_trades(content: bytes, source_name: str = "upload") -> dict[tuple, dic
             "buy_qty": v["buy_qty"],
             "sell_qty": v["sell_qty"],
             "source": source_name,
+            "quartile_levels": box_levels_by_trade.get(tid),
         }
 
     return trades
 
-
 def compute_analytics(trades: dict[tuple, dict]) -> dict:
-    """Aggregate P&L metrics across all trades (completed only for realized P&L)."""
     total_pl = 0.0
     wins = 0
     losses = 0

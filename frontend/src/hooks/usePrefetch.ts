@@ -17,18 +17,18 @@ export function usePrefetch(sessionId: string | null) {
 
   useEffect(() => {
     stopPolling()
-    setStatus(null) // clear previous session's status immediately
+    setStatus(null)
     if (!sessionId) return
 
     let cancelled = false
     const poll = async () => {
       try {
         const s = await api.getPrefetchStatus(sessionId)
-        if (cancelled) return // session changed mid-request
+        if (cancelled) return
         setStatus(s)
         if (s.done) stopPolling()
       } catch {
-        // non-fatal, keep polling
+
       }
     }
 

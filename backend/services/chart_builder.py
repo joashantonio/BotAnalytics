@@ -1,8 +1,3 @@
-"""
-Builds the JSON payload consumed by the frontend TradingView Lightweight Charts.
-Mirrors the logic in completed_trades_fetcher.py and ongoing_trades_fetcher.py
-but outputs data instead of matplotlib figures.
-"""
 from datetime import datetime
 
 import numpy as np
@@ -10,13 +5,16 @@ import pandas as pd
 
 from .market_data import fetch_wide, get_company_name
 from .psar import compute_psar, compute_chart_window, wide_trend_block, get_quartile
+from . import ma10 as ma10_mod
+from . import ma200 as ma200_mod
 
 PIN_BUY = "#00c853"
 PIN_SELL = "#f44336"
 AVG_BUY = "#ffd600"
 AVG_SELL = "#9c27b0"
 PSAR_DOT = "#f57f17"
-
+MA10_LINE = "#2962ff"
+MA200_LINE = "#e91e63"
 
 def _order_exec_date(order: dict) -> pd.Timestamp:
     d = order["exec_date"]
@@ -24,20 +22,31 @@ def _order_exec_date(order: dict) -> pd.Timestamp:
         return pd.Timestamp(d.date())
     return pd.Timestamp(d)
 
+def _widen_window_for_range(
+    df_wide: "pd.DataFrame", start_i: int, end_i: int, from_date: str | None, to_date: str | None
+) -> tuple[int, int]:
+    if not from_date and not to_date:
+        return start_i, end_i
+
+    last = len(df_wide) - 1
+    dates = df_wide.index
+
+    if from_date:
+        fi = int(np.searchsorted(dates, pd.Timestamp(from_date), side="left"))
+        start_i = min(start_i, min(fi, last))
+    if to_date:
+        ti = int(np.searchsorted(dates, pd.Timestamp(to_date), side="right")) - 1
+        end_i = max(end_i, max(0, min(ti, last)))
+
+    return start_i, end_i
 
 def build_chart_data(
     trade_info: dict,
     suffix: str = ".SR",
     _df_wide_override: "pd.DataFrame | None" = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
 ) -> dict:
-    """
-    Returns a dict with keys:
-      candles, psar, buy_markers, sell_markers,
-      avg_buy, avg_sell, quartile_boxes, company_name,
-      cycle_direction, trade_id, symbol, status
-
-    _df_wide_override: pre-fetched DataFrame from prefetch service; skips yfinance call.
-    """
     suffix = suffix.strip()
     ticker = f"{trade_info['symbol']}{suffix}"
     orders = trade_info["orders"]
@@ -51,6 +60,7 @@ def build_chart_data(
     sar_w, trend_w = compute_psar(highs_w, lows_w)
 
     start_i, end_i = compute_chart_window(df_wide, trend_w, sar_w, entry_date, exit_date, orders)
+    start_i, end_i = _widen_window_for_range(df_wide, start_i, end_i, from_date, to_date)
     df = df_wide.iloc[start_i: end_i + 1].copy()
 
     if df.empty:
@@ -63,13 +73,9 @@ def build_chart_data(
     volumes = df["Volume"].values.astype(float)
     dates = df.index
     trend = trend_w[start_i: end_i + 1]
-    # Slice the wide PSAR rather than recomputing on the narrow window.
-    # compute_psar always seeds trend[0]=-1 / sar[0]=high[0], so recomputing
-    # on a slice that starts mid-trend produces wrong warmup dots that no
-    # longer line up with `trend` (which is sliced from the wide array).
+
     sar = sar_w[start_i: end_i + 1]
 
-    # candle series (time as ISO date string for Lightweight Charts)
     candles = []
     volume_series = []
     for i, date in enumerate(dates):
@@ -87,18 +93,15 @@ def build_chart_data(
             "color": "#a5d6a7" if closes[i] >= opens[i] else "#ef9a9a",
         })
 
-    # PSAR dots
     psar_series = []
     for i, date in enumerate(dates):
         psar_series.append({"time": date.strftime("%Y-%m-%d"), "value": round(float(sar[i]), 4)})
 
-    # entry trend direction
     entry_dt = pd.Timestamp(entry_date)
     entry_xi = int(np.searchsorted(dates, entry_dt, side="left"))
     entry_xi = max(0, min(entry_xi, len(df) - 1))
     cycle_direction = "Uptrend" if trend[entry_xi] == 1 else "Downtrend"
 
-    # buy/sell markers
     buy_markers = []
     sell_markers = []
     buy_pq = buy_q = sell_pq = sell_q = 0.0
@@ -128,12 +131,10 @@ def build_chart_data(
     avg_buy_val = round(buy_pq / buy_q, 4) if buy_q > 0 else None
     avg_sell_val = round(sell_pq / sell_q, 4) if sell_q > 0 else None
 
-    # realized P&L (completed only)
     realized_pl = None
     if status == "completed" and buy_q > 0 and sell_q > 0:
         realized_pl = round(sell_pq - buy_pq, 2)
 
-    # quartile boxes — one per trend block per side
     quartile_boxes = _build_quartile_boxes(
         orders, df_wide, df, trend_w, sar_w,
         highs, lows, dates, start_i, end_i, status
@@ -164,19 +165,13 @@ def build_chart_data(
         "quartile_boxes": quartile_boxes,
     }
 
-
 def _build_quartile_boxes(
     orders, df_wide, df, trend_w, sar_w,
     highs, lows, dates, start_i, end_i, status
 ) -> list[dict]:
-    """
-    For completed trades: one box per unique trend block touched by orders.
-    For ongoing trades: only the latest trend block per side.
-    """
     drawn_blocks: set[tuple] = set()
     boxes = []
 
-    # for ongoing: find latest block per side
     latest_block: dict[str, tuple] = {}
     if status == "ongoing":
         for order in orders:
@@ -236,7 +231,6 @@ def _build_quartile_boxes(
             drawn_blocks.add(block_key)
             continue
 
-        # date range for box (use actual date strings)
         left_date = dates[bs_vis].strftime("%Y-%m-%d")
         right_date = dates[be_vis].strftime("%Y-%m-%d")
 
@@ -260,9 +254,385 @@ def _build_quartile_boxes(
 
     return boxes
 
+def build_chart_data_ma10(
+    trade_info: dict,
+    suffix: str = ".SR",
+    _df_wide_override: "pd.DataFrame | None" = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
+) -> dict:
+    suffix = suffix.strip()
+    ticker = f"{trade_info['symbol']}{suffix}"
+    orders = trade_info["orders"]
+    entry_date = trade_info["entry_date"]
+    exit_date = trade_info.get("exit_date") or pd.Timestamp.today().strftime("%Y-%m-%d")
+    status = trade_info["status"]
+
+    df_wide = _df_wide_override if _df_wide_override is not None else fetch_wide(ticker, entry_date, exit_date)
+    closes_w = df_wide["Close"].values.astype(float)
+    ma_w = ma10_mod.compute_ma10(closes_w)
+    trend_w = ma10_mod.compute_trend(closes_w, ma_w)
+
+    start_i, end_i = ma10_mod.compute_chart_window(df_wide, trend_w, entry_date, exit_date, orders)
+    start_i, end_i = _widen_window_for_range(df_wide, start_i, end_i, from_date, to_date)
+    df = df_wide.iloc[start_i: end_i + 1].copy()
+
+    if df.empty:
+        raise ValueError("Empty chart window after MA10 cycle detection")
+
+    opens = df["Open"].values.astype(float)
+    highs = df["High"].values.astype(float)
+    lows = df["Low"].values.astype(float)
+    closes = df["Close"].values.astype(float)
+    volumes = df["Volume"].values.astype(float)
+    dates = df.index
+    trend = trend_w[start_i: end_i + 1]
+    ma = ma_w[start_i: end_i + 1]
+
+    candles = []
+    volume_series = []
+    for i, date in enumerate(dates):
+        t = date.strftime("%Y-%m-%d")
+        candles.append({
+            "time": t,
+            "open": round(float(opens[i]), 4),
+            "high": round(float(highs[i]), 4),
+            "low": round(float(lows[i]), 4),
+            "close": round(float(closes[i]), 4),
+        })
+        volume_series.append({
+            "time": t,
+            "value": float(volumes[i]),
+            "color": "#a5d6a7" if closes[i] >= opens[i] else "#ef9a9a",
+        })
+
+    ma10_series = []
+    for i, date in enumerate(dates):
+        if np.isnan(ma[i]):
+            continue
+        ma10_series.append({"time": date.strftime("%Y-%m-%d"), "value": round(float(ma[i]), 4)})
+
+    entry_dt = pd.Timestamp(entry_date)
+    entry_xi = int(np.searchsorted(dates, entry_dt, side="left"))
+    entry_xi = max(0, min(entry_xi, len(df) - 1))
+    cycle_direction = "Uptrend" if trend[entry_xi] == 1 else "Downtrend"
+
+    buy_markers = []
+    sell_markers = []
+    buy_pq = buy_q = sell_pq = sell_q = 0.0
+
+    for order in orders:
+        ep = order["exec_price"]
+        if ep is None:
+            continue
+        q = order["qty"]
+        is_buy = order["side"] == "1"
+        odt = _order_exec_date(order)
+
+        xi = int(np.searchsorted(dates, odt, side="left"))
+        xi = max(0, min(xi, len(df) - 1))
+        t = dates[xi].strftime("%Y-%m-%d")
+
+        marker = {"time": t, "price": round(float(ep), 4), "qty": q}
+        if is_buy:
+            buy_markers.append(marker)
+            buy_pq += ep * q
+            buy_q += q
+        else:
+            sell_markers.append(marker)
+            sell_pq += ep * q
+            sell_q += q
+
+    avg_buy_val = round(buy_pq / buy_q, 4) if buy_q > 0 else None
+    avg_sell_val = round(sell_pq / sell_q, 4) if sell_q > 0 else None
+
+    realized_pl = None
+    if status == "completed" and buy_q > 0 and sell_q > 0:
+        realized_pl = round(sell_pq - buy_pq, 2)
+
+    quartile_boxes: list[dict] = []
+    quartile_levels = _latest_ma10_quartile_levels(orders, df_wide, trend_w, ma_w, status)
+
+    company_name = get_company_name(ticker)
+
+    return {
+        "trade_id": trade_info["trade_id"],
+        "symbol": trade_info["symbol"],
+        "ticker": ticker,
+        "company_name": company_name,
+        "status": status,
+        "cycle_direction": cycle_direction,
+        "entry_date": entry_date,
+        "exit_date": trade_info.get("exit_date"),
+        "candles": candles,
+        "volume": volume_series,
+        "ma10": ma10_series,
+        "buy_markers": buy_markers,
+        "sell_markers": sell_markers,
+        "avg_buy": avg_buy_val,
+        "avg_sell": avg_sell_val,
+        "realized_pl": realized_pl,
+        "buy_qty": buy_q,
+        "sell_qty": sell_q,
+        "net_qty": round(buy_q - sell_q, 4),
+        "quartile_boxes": quartile_boxes,
+        "quartile_levels": quartile_levels,
+    }
+
+def _latest_ma10_quartile_levels(
+    orders, df_wide, trend_w, ma_w, status
+) -> dict | None:
+    latest_order_i_w: int = -1
+    latest_block: tuple[int, int] | None = None
+    touching_i_ws: list[int] = []
+
+    for order in orders:
+        if order["exec_price"] is None:
+            continue
+        is_buy = order["side"] == "1"
+        expected_trend = -1 if is_buy else 1
+        odt = _order_exec_date(order)
+
+        i_w = int(np.searchsorted(df_wide.index, odt, side="left"))
+        i_w = min(i_w, len(df_wide) - 1)
+        if trend_w[i_w] != expected_trend:
+            continue
+
+        if i_w > latest_order_i_w:
+            latest_order_i_w = i_w
+            latest_block = ma10_mod.wide_trend_block(trend_w, i_w)
+
+    if latest_block is None:
+        return None
+
+    bs_w, be_w = latest_block
+
+    for order in orders:
+        if order["exec_price"] is None:
+            continue
+        is_buy = order["side"] == "1"
+        expected_trend = -1 if is_buy else 1
+        odt = _order_exec_date(order)
+        i_w = int(np.searchsorted(df_wide.index, odt, side="left"))
+        i_w = min(i_w, len(df_wide) - 1)
+        if trend_w[i_w] != expected_trend:
+            continue
+        if bs_w <= i_w <= be_w:
+            touching_i_ws.append(i_w)
+
+    span_end = min(be_w, max(touching_i_ws)) if touching_i_ws else be_w
+
+    wide_highs = df_wide["High"].values.astype(float)
+    wide_lows = df_wide["Low"].values.astype(float)
+
+    is_downtrend = trend_w[bs_w] == -1
+
+    start_price = float(ma_w[bs_w])
+    block_lows = wide_lows[bs_w: span_end + 1]
+    block_highs = wide_highs[bs_w: span_end + 1]
+
+    if is_downtrend:
+        price_hi = start_price
+        price_lo = float(block_lows.min())
+    else:
+        price_lo = start_price
+        price_hi = float(block_highs.max())
+
+    if price_hi <= price_lo:
+        return None
+
+    return ma10_mod.box_levels(price_lo, price_hi)
+
+def build_chart_data_ma200(
+    trade_info: dict,
+    suffix: str = ".SR",
+    _df_wide_override: "pd.DataFrame | None" = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
+) -> dict:
+    suffix = suffix.strip()
+    ticker = f"{trade_info['symbol']}{suffix}"
+    orders = trade_info["orders"]
+    entry_date = trade_info["entry_date"]
+    exit_date = trade_info.get("exit_date") or pd.Timestamp.today().strftime("%Y-%m-%d")
+    status = trade_info["status"]
+
+    df_wide = _df_wide_override if _df_wide_override is not None else fetch_wide(ticker, entry_date, exit_date)
+    closes_w = df_wide["Close"].values.astype(float)
+    ma_w = ma200_mod.compute_ma200(closes_w)
+    trend_w = ma200_mod.compute_trend(closes_w, ma_w)
+
+    start_i, end_i = ma200_mod.compute_chart_window(df_wide, trend_w, entry_date, exit_date, orders)
+    start_i, end_i = _widen_window_for_range(df_wide, start_i, end_i, from_date, to_date)
+    df = df_wide.iloc[start_i: end_i + 1].copy()
+
+    if df.empty:
+        raise ValueError("Empty chart window after MA200 cycle detection")
+
+    opens = df["Open"].values.astype(float)
+    highs = df["High"].values.astype(float)
+    lows = df["Low"].values.astype(float)
+    closes = df["Close"].values.astype(float)
+    volumes = df["Volume"].values.astype(float)
+    dates = df.index
+    trend = trend_w[start_i: end_i + 1]
+    ma = ma_w[start_i: end_i + 1]
+
+    candles = []
+    volume_series = []
+    for i, date in enumerate(dates):
+        t = date.strftime("%Y-%m-%d")
+        candles.append({
+            "time": t,
+            "open": round(float(opens[i]), 4),
+            "high": round(float(highs[i]), 4),
+            "low": round(float(lows[i]), 4),
+            "close": round(float(closes[i]), 4),
+        })
+        volume_series.append({
+            "time": t,
+            "value": float(volumes[i]),
+            "color": "#a5d6a7" if closes[i] >= opens[i] else "#ef9a9a",
+        })
+
+    ma200_series = []
+    for i, date in enumerate(dates):
+        if np.isnan(ma[i]):
+            continue
+        ma200_series.append({"time": date.strftime("%Y-%m-%d"), "value": round(float(ma[i]), 4)})
+
+    entry_dt = pd.Timestamp(entry_date)
+    entry_xi = int(np.searchsorted(dates, entry_dt, side="left"))
+    entry_xi = max(0, min(entry_xi, len(df) - 1))
+    cycle_direction = "Uptrend" if trend[entry_xi] == 1 else "Downtrend"
+
+    buy_markers = []
+    sell_markers = []
+    buy_pq = buy_q = sell_pq = sell_q = 0.0
+
+    for order in orders:
+        ep = order["exec_price"]
+        if ep is None:
+            continue
+        q = order["qty"]
+        is_buy = order["side"] == "1"
+        odt = _order_exec_date(order)
+
+        xi = int(np.searchsorted(dates, odt, side="left"))
+        xi = max(0, min(xi, len(df) - 1))
+        t = dates[xi].strftime("%Y-%m-%d")
+
+        marker = {"time": t, "price": round(float(ep), 4), "qty": q}
+        if is_buy:
+            buy_markers.append(marker)
+            buy_pq += ep * q
+            buy_q += q
+        else:
+            sell_markers.append(marker)
+            sell_pq += ep * q
+            sell_q += q
+
+    avg_buy_val = round(buy_pq / buy_q, 4) if buy_q > 0 else None
+    avg_sell_val = round(sell_pq / sell_q, 4) if sell_q > 0 else None
+
+    realized_pl = None
+    if status == "completed" and buy_q > 0 and sell_q > 0:
+        realized_pl = round(sell_pq - buy_pq, 2)
+
+    quartile_boxes: list[dict] = []
+    quartile_levels = _latest_ma200_quartile_levels(orders, df_wide, trend_w, ma_w, status)
+
+    company_name = get_company_name(ticker)
+
+    return {
+        "trade_id": trade_info["trade_id"],
+        "symbol": trade_info["symbol"],
+        "ticker": ticker,
+        "company_name": company_name,
+        "status": status,
+        "cycle_direction": cycle_direction,
+        "entry_date": entry_date,
+        "exit_date": trade_info.get("exit_date"),
+        "candles": candles,
+        "volume": volume_series,
+        "ma200": ma200_series,
+        "buy_markers": buy_markers,
+        "sell_markers": sell_markers,
+        "avg_buy": avg_buy_val,
+        "avg_sell": avg_sell_val,
+        "realized_pl": realized_pl,
+        "buy_qty": buy_q,
+        "sell_qty": sell_q,
+        "net_qty": round(buy_q - sell_q, 4),
+        "quartile_boxes": quartile_boxes,
+        "quartile_levels": quartile_levels,
+    }
+
+def _latest_ma200_quartile_levels(
+    orders, df_wide, trend_w, ma_w, status
+) -> dict | None:
+    latest_order_i_w: int = -1
+    latest_block: tuple[int, int] | None = None
+    touching_i_ws: list[int] = []
+
+    for order in orders:
+        if order["exec_price"] is None:
+            continue
+        is_buy = order["side"] == "1"
+        expected_trend = -1 if is_buy else 1
+        odt = _order_exec_date(order)
+
+        i_w = int(np.searchsorted(df_wide.index, odt, side="left"))
+        i_w = min(i_w, len(df_wide) - 1)
+        if trend_w[i_w] != expected_trend:
+            continue
+
+        if i_w > latest_order_i_w:
+            latest_order_i_w = i_w
+            latest_block = ma200_mod.wide_trend_block(trend_w, i_w)
+
+    if latest_block is None:
+        return None
+
+    bs_w, be_w = latest_block
+
+    for order in orders:
+        if order["exec_price"] is None:
+            continue
+        is_buy = order["side"] == "1"
+        expected_trend = -1 if is_buy else 1
+        odt = _order_exec_date(order)
+        i_w = int(np.searchsorted(df_wide.index, odt, side="left"))
+        i_w = min(i_w, len(df_wide) - 1)
+        if trend_w[i_w] != expected_trend:
+            continue
+        if bs_w <= i_w <= be_w:
+            touching_i_ws.append(i_w)
+
+    span_end = min(be_w, max(touching_i_ws)) if touching_i_ws else be_w
+
+    wide_highs = df_wide["High"].values.astype(float)
+    wide_lows = df_wide["Low"].values.astype(float)
+
+    is_downtrend = trend_w[bs_w] == -1
+
+    start_price = float(ma_w[bs_w])
+    block_lows = wide_lows[bs_w: span_end + 1]
+    block_highs = wide_highs[bs_w: span_end + 1]
+
+    if is_downtrend:
+        price_hi = start_price
+        price_lo = float(block_lows.min())
+    else:
+        price_lo = start_price
+        price_hi = float(block_highs.max())
+
+    if price_hi <= price_lo:
+        return None
+
+    return ma200_mod.box_levels(price_lo, price_hi)
 
 def build_analytics(trades: dict[tuple, dict], suffix: str = ".SR") -> dict:
-    """Compute per-symbol and aggregate analytics including quartile stats."""
     suffix = suffix.strip()
     buy_pq_total = buy_q_total = sell_pq_total = sell_q_total = 0.0
     wins = losses = completed = ongoing_count = 0
@@ -320,9 +690,7 @@ def build_analytics(trades: dict[tuple, dict], suffix: str = ".SR") -> dict:
         "wins": wins,
         "losses": losses,
         "win_rate": round(wins / completed * 100, 2) if completed > 0 else 0.0,
-        # realized P&L over COMPLETED trades only. sell_pq_total - buy_pq_total
-        # would subtract ongoing trades' open buys (no matching sell yet),
-        # dragging the total wildly negative.
+
         "total_pl": round(equity, 2),
         "avg_buy": round(buy_pq_total / buy_q_total, 4) if buy_q_total > 0 else None,
         "avg_sell": round(sell_pq_total / sell_q_total, 4) if sell_q_total > 0 else None,
@@ -333,38 +701,28 @@ def build_analytics(trades: dict[tuple, dict], suffix: str = ".SR") -> dict:
         ],
     }
 
-
 def _exec_date(order: dict) -> "pd.Timestamp":
     d = order["exec_date"]
     if isinstance(d, datetime):
         return pd.Timestamp(d.date())
     return pd.Timestamp(pd.Timestamp(d).date())
 
-
 def compute_correct_executions(
     trades: dict[tuple, dict],
     suffix: str = ".SR",
     from_date: str | None = None,
     to_date: str | None = None,
+    mode: str = "psar",
 ) -> dict:
-    """
-    Percentage of executions placed on the "correct" side of the PSAR trend:
-      - a BUY  is correct when the PSAR trend on its execution date is a downtrend
-      - a SELL is correct when the PSAR trend on its execution date is an uptrend
-    (Same trend convention as the chart quartile boxes.)
+    if mode == "ma10":
+        return _compute_correct_executions_ma10(trades, suffix=suffix, from_date=from_date, to_date=to_date)
+    if mode == "ma200":
+        return _compute_correct_executions_ma200(trades, suffix=suffix, from_date=from_date, to_date=to_date)
 
-    Only executions whose date falls within [from_date, to_date] inclusive are
-    counted. Both bounds optional. Symbols whose market data can't be fetched are
-    skipped and reported in `skipped_symbols`.
-    """
     suffix = suffix.strip()
     range_from = pd.Timestamp(from_date) if from_date else None
     range_to = pd.Timestamp(to_date) if to_date else None
 
-    # Group by symbol so each ticker is fetched once. Track both the orders and
-    # the entry/exit span so the OHLCV window matches the chart's window — PSAR
-    # is path-dependent from index 0, so the trend sign at a given date only
-    # agrees with the chart if both use the same (entry-120d, exit+120d) window.
     by_symbol: dict[str, dict] = {}
     for (tid, sym), info in trades.items():
         g = by_symbol.setdefault(sym, {"orders": [], "entries": [], "exits": []})
@@ -380,8 +738,7 @@ def compute_correct_executions(
     buy_total = buy_correct = 0
     sell_total = sell_correct = 0
     skipped: list[str] = []
-    # Quartile distribution of CORRECT executions within their PSAR trend block
-    # (same box geometry as the chart's quartile boxes). 1 = lowest band, 4 = highest.
+
     quartiles = {1: 0, 2: 0, 3: 0, 4: 0}
     buy_quartiles = {1: 0, 2: 0, 3: 0, 4: 0}
     sell_quartiles = {1: 0, 2: 0, 3: 0, 4: 0}
@@ -390,7 +747,7 @@ def compute_correct_executions(
     executions: list[dict] = []
 
     for sym, g in by_symbol.items():
-        # executions in range for this symbol
+
         rel = []
         for tid, o in g["orders"]:
             if o["exec_price"] is None:
@@ -405,7 +762,7 @@ def compute_correct_executions(
             continue
 
         ticker = f"{sym}{suffix}"
-        # Window keyed on entry/exit dates (same as chart), NOT exec dates.
+
         earliest = min(g["entries"])
         latest = max(g["exits"])
         try:
@@ -441,7 +798,7 @@ def compute_correct_executions(
             row_q: int | None = None
             if ok:
                 correct += 1
-                # quartile of the exec price within its trend block (chart box geometry)
+
                 bs_w, be_w = wide_trend_block(trend_w, i_w)
                 first_sar = float(sar_w[bs_w])
                 block_lows = lows[bs_w: be_w + 1]
@@ -451,9 +808,7 @@ def compute_correct_executions(
                 else:
                     price_lo, price_hi = first_sar, float(block_highs.max())
                 q = get_quartile(float(o["exec_price"]), price_lo, price_hi)
-                # Quartile numbering differs by side: for buys Q1 is the BOTTOM
-                # of the block (low buy price = Q1, get_quartile's natural order);
-                # for sells Q1 is the TOP (high sell price = Q1), so invert.
+
                 if not is_buy:
                     q = 5 - q
                 q = int(q)
@@ -489,7 +844,231 @@ def compute_correct_executions(
         "from_date": from_date,
         "to_date": to_date,
         "skipped_symbols": skipped,
-        # Quartile bands of correct executions (Q1 lowest … Q4 highest in the block).
+
+        "quartiles": {str(k): v for k, v in quartiles.items()},
+        "buy_quartiles": {str(k): v for k, v in buy_quartiles.items()},
+        "sell_quartiles": {str(k): v for k, v in sell_quartiles.items()},
+    }
+
+def _compute_correct_executions_ma10(
+    trades: dict[tuple, dict],
+    suffix: str = ".SR",
+    from_date: str | None = None,
+    to_date: str | None = None,
+) -> dict:
+    suffix = suffix.strip()
+    range_from = pd.Timestamp(from_date) if from_date else None
+    range_to = pd.Timestamp(to_date) if to_date else None
+
+    by_symbol: dict[str, dict] = {}
+    for (_, sym), info in trades.items():
+        g = by_symbol.setdefault(sym, {"orders": [], "entries": [], "exits": []})
+        g["orders"].extend(info["orders"])
+        if info["entry_date"]:
+            g["entries"].append(info["entry_date"])
+        exit_d = info.get("exit_date") or pd.Timestamp.today().strftime("%Y-%m-%d")
+        g["exits"].append(exit_d)
+
+    total = correct = 0
+    buy_total = buy_correct = 0
+    sell_total = sell_correct = 0
+    skipped: list[str] = []
+    quartiles = {1: 0, 2: 0, 3: 0, 4: 0}
+    buy_quartiles = {1: 0, 2: 0, 3: 0, 4: 0}
+    sell_quartiles = {1: 0, 2: 0, 3: 0, 4: 0}
+
+    for sym, g in by_symbol.items():
+        rel = []
+        for o in g["orders"]:
+            if o["exec_price"] is None:
+                continue
+            ed = _exec_date(o)
+            if range_from is not None and ed < range_from:
+                continue
+            if range_to is not None and ed > range_to:
+                continue
+            rel.append((ed, o))
+        if not rel or not g["entries"]:
+            continue
+
+        ticker = f"{sym}{suffix}"
+        earliest = min(g["entries"])
+        latest = max(g["exits"])
+        try:
+            df_wide = fetch_wide(ticker, earliest, latest)
+        except Exception:
+            skipped.append(sym)
+            continue
+
+        opens = df_wide["Open"].values.astype(float)
+        highs = df_wide["High"].values.astype(float)
+        lows = df_wide["Low"].values.astype(float)
+        closes = df_wide["Close"].values.astype(float)
+        ma_w = ma10_mod.compute_ma10(closes)
+        trend_w = ma10_mod.compute_trend(closes, ma_w)
+        dates = df_wide.index
+        n_w = len(df_wide)
+
+        for ed, o in rel:
+            i_w = int(np.searchsorted(dates, ed, side="left"))
+            i_w = min(i_w, n_w - 1)
+            is_buy = o["side"] == "1"
+            close = closes[i_w]
+            ma = ma_w[i_w]
+            if np.isnan(ma):
+                continue
+            ok = (is_buy and close < ma) or (not is_buy and close > ma)
+            total += 1
+            if is_buy:
+                buy_total += 1
+                if ok:
+                    buy_correct += 1
+            else:
+                sell_total += 1
+                if ok:
+                    sell_correct += 1
+            if ok:
+                correct += 1
+                expected_trend = -1 if is_buy else 1
+                if trend_w[i_w] == expected_trend:
+                    bs_w, be_w = ma10_mod.wide_trend_block(trend_w, i_w)
+                    edges = ma10_mod.block_box(opens, highs, lows, closes, trend_w, bs_w, be_w)
+                    if edges is not None:
+                        price_lo, price_hi = edges
+                        q = ma10_mod.get_quartile(float(o["exec_price"]), price_lo, price_hi)
+                        if not is_buy:
+                            q = 5 - q
+                        quartiles[q] += 1
+                        if is_buy:
+                            buy_quartiles[q] += 1
+                        else:
+                            sell_quartiles[q] += 1
+
+    return {
+        "total_executions": total,
+        "correct_executions": correct,
+        "correct_pct": round(correct / total * 100, 2) if total > 0 else 0.0,
+        "buy_total": buy_total,
+        "buy_correct": buy_correct,
+        "buy_pct": round(buy_correct / buy_total * 100, 2) if buy_total > 0 else 0.0,
+        "sell_total": sell_total,
+        "sell_correct": sell_correct,
+        "sell_pct": round(sell_correct / sell_total * 100, 2) if sell_total > 0 else 0.0,
+        "from_date": from_date,
+        "to_date": to_date,
+        "skipped_symbols": skipped,
+        "quartiles": {str(k): v for k, v in quartiles.items()},
+        "buy_quartiles": {str(k): v for k, v in buy_quartiles.items()},
+        "sell_quartiles": {str(k): v for k, v in sell_quartiles.items()},
+    }
+
+def _compute_correct_executions_ma200(
+    trades: dict[tuple, dict],
+    suffix: str = ".SR",
+    from_date: str | None = None,
+    to_date: str | None = None,
+) -> dict:
+    suffix = suffix.strip()
+    range_from = pd.Timestamp(from_date) if from_date else None
+    range_to = pd.Timestamp(to_date) if to_date else None
+
+    by_symbol: dict[str, dict] = {}
+    for (_, sym), info in trades.items():
+        g = by_symbol.setdefault(sym, {"orders": [], "entries": [], "exits": []})
+        g["orders"].extend(info["orders"])
+        if info["entry_date"]:
+            g["entries"].append(info["entry_date"])
+        exit_d = info.get("exit_date") or pd.Timestamp.today().strftime("%Y-%m-%d")
+        g["exits"].append(exit_d)
+
+    total = correct = 0
+    buy_total = buy_correct = 0
+    sell_total = sell_correct = 0
+    skipped: list[str] = []
+    quartiles = {1: 0, 2: 0, 3: 0, 4: 0}
+    buy_quartiles = {1: 0, 2: 0, 3: 0, 4: 0}
+    sell_quartiles = {1: 0, 2: 0, 3: 0, 4: 0}
+
+    for sym, g in by_symbol.items():
+        rel = []
+        for o in g["orders"]:
+            if o["exec_price"] is None:
+                continue
+            ed = _exec_date(o)
+            if range_from is not None and ed < range_from:
+                continue
+            if range_to is not None and ed > range_to:
+                continue
+            rel.append((ed, o))
+        if not rel or not g["entries"]:
+            continue
+
+        ticker = f"{sym}{suffix}"
+        earliest = min(g["entries"])
+        latest = max(g["exits"])
+        try:
+            df_wide = fetch_wide(ticker, earliest, latest)
+        except Exception:
+            skipped.append(sym)
+            continue
+
+        opens = df_wide["Open"].values.astype(float)
+        highs = df_wide["High"].values.astype(float)
+        lows = df_wide["Low"].values.astype(float)
+        closes = df_wide["Close"].values.astype(float)
+        ma_w = ma200_mod.compute_ma200(closes)
+        trend_w = ma200_mod.compute_trend(closes, ma_w)
+        dates = df_wide.index
+        n_w = len(df_wide)
+
+        for ed, o in rel:
+            i_w = int(np.searchsorted(dates, ed, side="left"))
+            i_w = min(i_w, n_w - 1)
+            is_buy = o["side"] == "1"
+            close = closes[i_w]
+            ma = ma_w[i_w]
+            if np.isnan(ma):
+                continue
+            ok = (is_buy and close < ma) or (not is_buy and close > ma)
+            total += 1
+            if is_buy:
+                buy_total += 1
+                if ok:
+                    buy_correct += 1
+            else:
+                sell_total += 1
+                if ok:
+                    sell_correct += 1
+            if ok:
+                correct += 1
+                expected_trend = -1 if is_buy else 1
+                if trend_w[i_w] == expected_trend:
+                    bs_w, be_w = ma200_mod.wide_trend_block(trend_w, i_w)
+                    edges = ma200_mod.block_box(opens, highs, lows, closes, trend_w, bs_w, be_w)
+                    if edges is not None:
+                        price_lo, price_hi = edges
+                        q = ma200_mod.get_quartile(float(o["exec_price"]), price_lo, price_hi)
+                        if not is_buy:
+                            q = 5 - q
+                        quartiles[q] += 1
+                        if is_buy:
+                            buy_quartiles[q] += 1
+                        else:
+                            sell_quartiles[q] += 1
+
+    return {
+        "total_executions": total,
+        "correct_executions": correct,
+        "correct_pct": round(correct / total * 100, 2) if total > 0 else 0.0,
+        "buy_total": buy_total,
+        "buy_correct": buy_correct,
+        "buy_pct": round(buy_correct / buy_total * 100, 2) if buy_total > 0 else 0.0,
+        "sell_total": sell_total,
+        "sell_correct": sell_correct,
+        "sell_pct": round(sell_correct / sell_total * 100, 2) if sell_total > 0 else 0.0,
+        "from_date": from_date,
+        "to_date": to_date,
+        "skipped_symbols": skipped,
         "quartiles": {str(k): v for k, v in quartiles.items()},
         "buy_quartiles": {str(k): v for k, v in buy_quartiles.items()},
         "sell_quartiles": {str(k): v for k, v in sell_quartiles.items()},

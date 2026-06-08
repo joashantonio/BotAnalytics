@@ -1,75 +1,87 @@
 import numpy as np
 import pandas as pd
 
-PSAR_STEP = 0.02
-PSAR_MAX = 0.20
+MA_PERIOD = 10
 LOOKBACK_DAYS = 120
 
-def compute_psar(
-    high: np.ndarray, low: np.ndarray, step: float = PSAR_STEP, max_af: float = PSAR_MAX
-) -> tuple[np.ndarray, np.ndarray]:
-    n = len(high)
-    sar = np.zeros(n)
+def compute_ma10(close: np.ndarray, period: int = MA_PERIOD) -> np.ndarray:
+    s = pd.Series(close)
+    return s.rolling(period).mean().to_numpy()
+
+def compute_trend(close: np.ndarray, ma: np.ndarray) -> np.ndarray:
+    n = len(close)
     trend = np.zeros(n, dtype=int)
-    af = step
-    ep = low[0]
-    sar[0] = high[0]
-    trend[0] = -1
-
-    for i in range(1, n):
-        prev_trend = trend[i - 1]
-        prev_sar = sar[i - 1]
-
-        if prev_trend == 1:
-            new_sar = prev_sar + af * (ep - prev_sar)
-            new_sar = min(new_sar, low[i - 1], low[max(0, i - 2)])
-            if low[i] < new_sar:
-                trend[i] = -1
-                sar[i] = ep
-                ep = low[i]
-                af = step
-            else:
-                trend[i] = 1
-                sar[i] = new_sar
-                if high[i] > ep:
-                    ep = high[i]
-                    af = min(af + step, max_af)
+    prev = -1
+    for i in range(n):
+        if np.isnan(ma[i]) or close[i] == ma[i]:
+            trend[i] = prev
+        elif close[i] > ma[i]:
+            trend[i] = 1
         else:
-            new_sar = prev_sar + af * (ep - prev_sar)
-            new_sar = max(new_sar, high[i - 1], high[max(0, i - 2)])
-            if high[i] > new_sar:
-                trend[i] = 1
-                sar[i] = ep
-                ep = high[i]
-                af = step
-            else:
-                trend[i] = -1
-                sar[i] = new_sar
-                if low[i] < ep:
-                    ep = low[i]
-                    af = min(af + step, max_af)
-
-    return sar, trend
+            trend[i] = -1
+        prev = trend[i]
+    return trend
 
 def wide_trend_block(trend_w: np.ndarray, i_w: int) -> tuple[int, int]:
     t = trend_w[i_w]
     s = i_w
     while s > 0 and trend_w[s - 1] == t:
         s -= 1
-    if s == 0:
-        first_rev = 0
-        for k in range(1, len(trend_w)):
-            if trend_w[k] != trend_w[k - 1]:
-                first_rev = k
-                break
-        if i_w >= first_rev and trend_w[first_rev] == t:
-            s = first_rev
     e = i_w
     while e < len(trend_w) - 1 and trend_w[e + 1] == t:
         e += 1
     return s, e
 
-def find_psar_cycle(
+def get_quartile(price: float, price_lo: float, price_hi: float) -> int:
+    h = price_hi - price_lo
+    if h <= 0:
+        return 1
+    frac = max(0.0, min((price - price_lo) / h, 1.0))
+    if frac < 0.25:
+        return 1
+    if frac < 0.50:
+        return 2
+    if frac < 0.75:
+        return 3
+    return 4
+
+def block_box(
+    open_: np.ndarray, high: np.ndarray, low: np.ndarray, close: np.ndarray,
+    trend_w: np.ndarray, bs_w: int, be_w: int,
+) -> tuple[float, float] | None:
+    is_downtrend = trend_w[bs_w] == -1
+    start_price = float(open_[bs_w])
+    block_lows = low[bs_w: be_w + 1]
+    block_highs = high[bs_w: be_w + 1]
+
+    if is_downtrend:
+        price_hi = start_price
+        price_lo = float(block_lows.min())
+    else:
+        price_lo = start_price
+        price_hi = float(block_highs.max())
+
+    if price_hi <= price_lo:
+        return None
+    return price_lo, price_hi
+
+def box_levels(price_lo: float, price_hi: float) -> dict:
+    rng = price_hi - price_lo
+    middle = (rng / 2) + price_lo
+    step = rng / 4
+    return {
+        "upper": round(price_hi, 4),
+        "lower": round(price_lo, 4),
+        "middle": round(middle, 4),
+        "range": round(rng, 4),
+        "quartile_step": round(step, 4),
+        "first_quartile": round(price_lo + step, 4),
+        "second_quartile": round(price_lo + 2 * step, 4),
+        "third_quartile": round(price_lo + 3 * step, 4),
+        "fourth_quartile": round(price_lo + 4 * step, 4),
+    }
+
+def find_ma10_cycle(
     dates: pd.DatetimeIndex, trend: np.ndarray, entry_date: str, exit_date: str
 ) -> tuple[int, int]:
     entry_dt = pd.Timestamp(entry_date)
@@ -91,29 +103,15 @@ def find_psar_cycle(
 
     return start, end
 
-def get_quartile(price: float, price_lo: float, price_hi: float) -> int:
-    h = price_hi - price_lo
-    if h <= 0:
-        return 1
-    frac = max(0.0, min((price - price_lo) / h, 1.0))
-    if frac < 0.25:
-        return 1
-    if frac < 0.50:
-        return 2
-    if frac < 0.75:
-        return 3
-    return 4
-
 def compute_chart_window(
     df_wide: pd.DataFrame,
     trend_w: np.ndarray,
-    sar_w: np.ndarray,
     entry_date: str,
     exit_date: str,
     orders: list[dict],
 ) -> tuple[int, int]:
     dates = df_wide.index
-    start_i, end_i = find_psar_cycle(dates, trend_w, entry_date, exit_date)
+    start_i, end_i = find_ma10_cycle(dates, trend_w, entry_date, exit_date)
 
     for order in orders:
         if order["exec_price"] is None:
