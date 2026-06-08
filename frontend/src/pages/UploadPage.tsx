@@ -31,9 +31,9 @@ export default function UploadPage({
   const inputRef = useRef<HTMLInputElement>(null)
 
   const handleFiles = (raw: FileList | File[]) => {
-    const files = Array.from(raw).filter((f) => f.name.toLowerCase().endsWith('.csv'))
+    const files = Array.from(raw).filter((f) => /\.(csv|xlsx|xlsm)$/i.test(f.name))
     const rejected = Array.from(raw).length - files.length
-    if (rejected > 0) alert(`${rejected} file(s) skipped — only CSV supported`)
+    if (rejected > 0) alert(`${rejected} file(s) skipped — only CSV or XLSX supported`)
     if (files.length) onUpload(files.length === 1 ? files[0] : files)
   }
 
@@ -49,7 +49,7 @@ export default function UploadPage({
 
   const formatDate = (iso: string) => {
     try {
-      // Append 'Z' only when the string has no timezone info (naive datetime from SQLite)
+
       const normalized = /[Zz]$|[+-]\d{2}:\d{2}$/.test(iso) ? iso : iso + 'Z'
       const d = new Date(normalized)
       if (isNaN(d.getTime())) return iso
@@ -68,11 +68,10 @@ export default function UploadPage({
       <div>
         <h1 className="text-2xl font-bold text-white mb-1">Trade Files</h1>
         <p className="text-slate-400 text-sm">
-          CSV with columns: Trade, Symbol, Side, Quantity, Execution Price, Execution Date
+          CSV or XLSX with columns: Trade, Symbol, Side, Quantity, Execution Price, Execution Date
         </p>
       </div>
 
-      {/* suffix input */}
       <div className="flex items-center gap-3">
         <label className="text-sm text-slate-400 w-36 shrink-0">Exchange suffix</label>
         <input
@@ -84,7 +83,6 @@ export default function UploadPage({
         <span className="text-xs text-slate-500">e.g. .SR for Saudi, .T for Tokyo, blank for US</span>
       </div>
 
-      {/* saved CSV library */}
       {sessions.length > 0 && (
         <div className="space-y-2">
           <h2 className="text-sm font-semibold text-slate-300 uppercase tracking-wide">Saved Files</h2>
@@ -123,7 +121,7 @@ export default function UploadPage({
                   <button
                     onClick={(e) => { e.stopPropagation(); onDeleteSession(s.session_id) }}
                     className="ml-3 shrink-0 text-xs text-slate-500 hover:text-red-400 transition-colors border border-border hover:border-red-700/50 px-2 py-1 rounded"
-                    title="Delete this CSV"
+                    title="Delete this file"
                   >
                     Delete
                   </button>
@@ -134,7 +132,6 @@ export default function UploadPage({
         </div>
       )}
 
-      {/* drop zone — always visible for new uploads */}
       <div>
         {sessions.length > 0 && (
           <h2 className="text-sm font-semibold text-slate-300 uppercase tracking-wide mb-2">Upload New File</h2>
@@ -145,13 +142,13 @@ export default function UploadPage({
           onClick={() => inputRef.current?.click()}
           className="border-2 border-dashed border-border rounded-xl p-10 text-center cursor-pointer hover:border-accent/60 transition-colors select-none"
         >
-          <input ref={inputRef} type="file" accept=".csv" multiple className="hidden" onChange={onChange} />
+          <input ref={inputRef} type="file" accept=".csv,.xlsx,.xlsm" multiple className="hidden" onChange={onChange} />
           {uploading ? (
             <div className="text-slate-400 text-sm animate-pulse">Uploading and parsing…</div>
           ) : (
             <>
               <div className="text-3xl mb-3">📂</div>
-              <p className="text-white font-medium">Drop CSV files here or click to browse</p>
+              <p className="text-white font-medium">Drop CSV or XLSX files here or click to browse</p>
               <p className="text-slate-500 text-xs mt-1">Multiple files supported · Max 50 MB each</p>
             </>
           )}
@@ -164,7 +161,6 @@ export default function UploadPage({
         </div>
       )}
 
-      {/* active session summary */}
       {session && (
         <div className="bg-panel border border-border rounded-xl p-6 space-y-4">
           <div className="flex items-start justify-between">

@@ -6,7 +6,6 @@ import {
   type IChartApi,
   type ISeriesApi,
   type CandlestickData,
-  type HistogramData,
   type LineData,
   type Time,
 } from 'lightweight-charts'
@@ -27,6 +26,8 @@ const COLORS = {
   candleUp: '#26a69a',
   candleDown: '#ef5350',
   psar: '#f57f17',
+  ma10: '#2962ff',
+  ma200: '#e91e63',
   buy: '#00c853',
   sell: '#f44336',
   avgBuy: '#ffd600',
@@ -70,7 +71,6 @@ export default function TradeChart({ data }: Props) {
     })
     chartRef.current = chart
 
-    // ── Candlestick series ──────────────────────────────────────────────────
     const candleSeries = chart.addCandlestickSeries({
       upColor: COLORS.candleUp,
       downColor: COLORS.candleDown,
@@ -82,29 +82,43 @@ export default function TradeChart({ data }: Props) {
     candleSeries.setData(data.candles as CandlestickData<Time>[])
     candleRef.current = candleSeries
 
-    // ── Volume histogram (separate pane) ────────────────────────────────────
-    const volSeries = chart.addHistogramSeries({
-      priceFormat: { type: 'volume' },
-      priceScaleId: 'volume',
-    })
-    chart.priceScale('volume').applyOptions({
-      scaleMargins: { top: 0.8, bottom: 0 },
-    })
-    volSeries.setData(data.volume as HistogramData<Time>[])
+    if (data.psar && data.psar.length > 0) {
+      const psarSeries = chart.addLineSeries({
+        color: COLORS.psar,
+        lineWidth: 1,
+        lineStyle: LineStyle.Dotted,
+        crosshairMarkerVisible: false,
+        lastValueVisible: false,
+        priceLineVisible: false,
+        pointMarkersVisible: true,
+      })
+      psarSeries.setData(data.psar as LineData<Time>[])
+    }
+    if (data.ma10 && data.ma10.length > 0) {
+      const ma10Series = chart.addLineSeries({
+        color: COLORS.ma10,
+        lineWidth: 2,
+        lineStyle: LineStyle.Solid,
+        crosshairMarkerVisible: true,
+        lastValueVisible: true,
+        priceLineVisible: false,
+        title: 'MA 10',
+      })
+      ma10Series.setData(data.ma10 as LineData<Time>[])
+    }
+    if (data.ma200 && data.ma200.length > 0) {
+      const ma200Series = chart.addLineSeries({
+        color: COLORS.ma200,
+        lineWidth: 2,
+        lineStyle: LineStyle.Solid,
+        crosshairMarkerVisible: true,
+        lastValueVisible: true,
+        priceLineVisible: false,
+        title: 'MA 200',
+      })
+      ma200Series.setData(data.ma200 as LineData<Time>[])
+    }
 
-    // ── PSAR dots ───────────────────────────────────────────────────────────
-    const psarSeries = chart.addLineSeries({
-      color: COLORS.psar,
-      lineWidth: 1,
-      lineStyle: LineStyle.Dotted,
-      crosshairMarkerVisible: false,
-      lastValueVisible: false,
-      priceLineVisible: false,
-      pointMarkersVisible: true,
-    })
-    psarSeries.setData(data.psar as LineData<Time>[])
-
-    // ── Average buy line ───────────────────────────────────────────────────
     if (data.avg_buy != null) {
       const avgBuySeries = chart.addLineSeries({
         color: COLORS.avgBuy,
@@ -124,7 +138,6 @@ export default function TradeChart({ data }: Props) {
       }
     }
 
-    // ── Average sell line ──────────────────────────────────────────────────
     if (data.avg_sell != null) {
       const avgSellSeries = chart.addLineSeries({
         color: COLORS.avgSell,
@@ -144,10 +157,6 @@ export default function TradeChart({ data }: Props) {
       }
     }
 
-    // Lightweight Charts requires series data to be strictly ascending and
-    // unique by time. Multiple orders can execute on the same bar, so collapse
-    // same-bar markers into one qty-weighted point before plotting — otherwise
-    // setData throws "data must be asc ordered by time" and the chart blanks.
     const aggregateMarkers = (markers: typeof data.buy_markers) => {
       const byTime = new Map<string, { time: string; price: number; qty: number }>()
       for (const m of markers) {
@@ -162,10 +171,6 @@ export default function TradeChart({ data }: Props) {
       return [...byTime.values()].sort((a, b) => (a.time < b.time ? -1 : 1))
     }
 
-    // ── Buy / sell pin markers ───────────────────────────────────────────────
-    // Drawn as location pins (green buy / red sell) via a custom primitive —
-    // Lightweight Charts only offers circle/square/arrow shapes. Same-bar orders
-    // are collapsed to one qty-weighted pin first.
     const pins: PinMarker[] = [
       ...aggregateMarkers(data.buy_markers).map((m) => ({
         time: m.time,
@@ -186,8 +191,6 @@ export default function TradeChart({ data }: Props) {
       )
     }
 
-    // ── Exec-date highlights on the time axis ────────────────────────────────
-    // blue = buy + sell same day, green = buy only, red = sell only.
     const sidesByDate = new Map<string, { buy: boolean; sell: boolean }>()
     for (const m of data.buy_markers) {
       const e = sidesByDate.get(m.time) ?? { buy: false, sell: false }
@@ -207,15 +210,39 @@ export default function TradeChart({ data }: Props) {
       candleSeries.attachPrimitive(new ExecDateHighlightPrimitive(execMarks))
     }
 
-    // ── Quartile boxes as bounded rectangles ────────────────────────────────
-    // Drawn via a custom series primitive (canvas) so each box is bounded to
-    // its trend block (left_date..right_date) with fill, border, dividers and
-    // Q labels — matching _draw_quartile_box in the matplotlib reference.
     if (data.quartile_boxes.length > 0) {
       candleSeries.attachPrimitive(new QuartileBoxPrimitive(data.quartile_boxes))
     }
 
-    // fit content
+    if (data.quartile_levels) {
+      const ql = data.quartile_levels
+      const first = data.candles[0]?.time
+      const last = data.candles[data.candles.length - 1]?.time
+      if (first && last) {
+        const levels: Array<[number, string, string]> = [
+          [ql.fourth_quartile, '#64b5f6', `Fourth Quartile ${ql.fourth_quartile.toFixed(2)}`],
+          [ql.third_quartile, '#64b5f6', `Third Quartile ${ql.third_quartile.toFixed(2)}`],
+          [ql.second_quartile, '#64b5f6', `Second Quartile ${ql.second_quartile.toFixed(2)}`],
+          [ql.first_quartile, '#64b5f6', `First Quartile ${ql.first_quartile.toFixed(2)}`],
+        ]
+        for (const [value, color, title] of levels) {
+          const lineSeries = chart.addLineSeries({
+            color,
+            lineWidth: 1,
+            lineStyle: LineStyle.Dashed,
+            crosshairMarkerVisible: false,
+            lastValueVisible: true,
+            priceLineVisible: false,
+            title,
+          })
+          lineSeries.setData([
+            { time: first as Time, value },
+            { time: last as Time, value },
+          ])
+        }
+      }
+    }
+
     chart.timeScale().fitContent()
 
     const handleResize = () => {

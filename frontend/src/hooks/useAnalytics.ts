@@ -32,7 +32,7 @@ export function useAnalytics() {
     } finally {
       setLoading(false)
     }
-  }, []) // stable ref — stale-check done via refs
+  }, [])
 
   const clear = useCallback(() => {
     setAnalytics(null)

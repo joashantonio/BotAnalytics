@@ -23,7 +23,14 @@ export default function ChartPage({
   const [filterSymbol, setFilterSymbol] = useState(selectedSymbol ?? '')
   const [fromDate, setFromDate] = useState('')
   const [toDate, setToDate] = useState('')
-  const { data, loading, error, load } = useChart(session?.session_id ?? '', suffix)
+  const [indicatorMode, setIndicatorMode] = useState<'psar' | 'ma10' | 'ma200'>('psar')
+  const { data, loading, error, load } = useChart(
+    session?.session_id ?? '',
+    suffix,
+    indicatorMode,
+    fromDate || undefined,
+    toDate || undefined,
+  )
 
   useEffect(() => {
     if (!session) return
@@ -33,9 +40,6 @@ export default function ChartPage({
     api.getTrades(session.session_id, params).then(setTrades).catch(console.error)
   }, [session, fromDate, toDate])
 
-  // Reset stale filters when the loaded session changes — a previous CSV's
-  // symbol/date range won't match the new file and would hide every trade.
-  // Default to "All symbols" so selecting a trade never narrows the list.
   useEffect(() => {
     setFilterSymbol('')
     setFromDate('')
@@ -46,7 +50,7 @@ export default function ChartPage({
     if (session && selectedSymbol && selectedTradeId) {
       load(selectedSymbol, selectedTradeId)
     }
-  }, [session, selectedSymbol, selectedTradeId, load])
+  }, [session, selectedSymbol, selectedTradeId, indicatorMode, load])
 
   if (!session) {
     return (
@@ -61,14 +65,12 @@ export default function ChartPage({
   const filteredTrades = trades.filter((t) => !filterSymbol || t.symbol === filterSymbol)
 
   const handleSelect = (symbol: string, tradeId: string) => {
-    // only update selection — the effect above loads when it changes.
-    // calling load() here too would fire a duplicate fetch.
+
     onSelectTrade(symbol, tradeId)
   }
 
   return (
     <div className="flex h-full overflow-hidden">
-      {/* sidebar — trade picker */}
       <aside className="w-64 shrink-0 border-r border-border bg-panel flex flex-col overflow-hidden">
         <div className="p-3 border-b border-border space-y-2">
           <div className="flex items-center justify-between text-xs text-slate-500">
@@ -77,6 +79,43 @@ export default function ChartPage({
               {suffix.trim() || '(none)'}
             </span>
           </div>
+
+          <div className="space-y-1">
+            <span className="text-xs text-slate-500">Indicator</span>
+            <div className="flex rounded border border-border overflow-hidden text-xs">
+              <button
+                onClick={() => setIndicatorMode('psar')}
+                className={`flex-1 px-2 py-1.5 transition-colors ${
+                  indicatorMode === 'psar'
+                    ? 'bg-accent/20 text-accent font-medium'
+                    : 'bg-surface text-slate-400 hover:text-white'
+                }`}
+              >
+                PSAR
+              </button>
+              <button
+                onClick={() => setIndicatorMode('ma10')}
+                className={`flex-1 px-2 py-1.5 transition-colors border-l border-border ${
+                  indicatorMode === 'ma10'
+                    ? 'bg-accent/20 text-accent font-medium'
+                    : 'bg-surface text-slate-400 hover:text-white'
+                }`}
+              >
+                MA10
+              </button>
+              <button
+                onClick={() => setIndicatorMode('ma200')}
+                className={`flex-1 px-2 py-1.5 transition-colors border-l border-border ${
+                  indicatorMode === 'ma200'
+                    ? 'bg-accent/20 text-accent font-medium'
+                    : 'bg-surface text-slate-400 hover:text-white'
+                }`}
+              >
+                MA200
+              </button>
+            </div>
+          </div>
+
           <select
             value={filterSymbol}
             onChange={(e) => setFilterSymbol(e.target.value)}
@@ -90,7 +129,6 @@ export default function ChartPage({
             ))}
           </select>
 
-          {/* execution-date range — keeps trades with any buy/sell executed in [from, to] */}
           <div className="space-y-1">
             <div className="flex items-center justify-between text-xs text-slate-500">
               <span>Execution date range</span>
@@ -166,9 +204,7 @@ export default function ChartPage({
         </div>
       </aside>
 
-      {/* chart area */}
       <div className="flex-1 flex flex-col overflow-hidden">
-        {/* chart header */}
         {data && (
           <div className="px-4 py-2 border-b border-border bg-panel shrink-0 flex items-center gap-4 flex-wrap">
             <span className="font-bold text-white">{data.company_name}</span>
@@ -206,7 +242,6 @@ export default function ChartPage({
           </div>
         )}
 
-        {/* chart */}
         <div className="flex-1 relative overflow-hidden">
           {loading && (
             <div className="absolute inset-0 flex items-center justify-center bg-surface/80 z-10">

@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, Query
 
-from ..services.chart_builder import build_chart_data, build_analytics, compute_correct_executions
+from ..services.chart_builder import build_chart_data, build_chart_data_ma10, build_chart_data_ma200, build_analytics, compute_correct_executions
 from ..store import get_session
 from ..cache import (
     get_chart, set_chart,
@@ -8,7 +8,6 @@ from ..cache import (
 )
 
 router = APIRouter(prefix="/symbols", tags=["symbols"])
-
 
 @router.get("/{session_id}")
 async def list_symbols(session_id: str):
@@ -29,7 +28,6 @@ async def list_symbols(session_id: str):
         symbol_map[sym]["trades"].append(tid)
 
     return sorted(symbol_map.values(), key=lambda s: s["symbol"])
-
 
 @router.get("/{session_id}/analytics/summary")
 async def get_session_analytics(
@@ -54,23 +52,23 @@ async def get_session_analytics(
     set_analytics(session_id, SESSION_SCOPE, suffix, data)
     return data
 
-
 @router.get("/{session_id}/analytics/correct-executions")
 async def get_correct_executions(
     session_id: str,
     suffix: str = Query(".SR"),
     from_date: str | None = Query(None, description="ISO date YYYY-MM-DD"),
     to_date: str | None = Query(None, description="ISO date YYYY-MM-DD"),
+    mode: str = Query("psar", description="Trend mode: psar | ma10 | ma200"),
 ):
-    """
-    % of executions on the correct side of the PSAR trend (buy in downtrend,
-    sell in uptrend), optionally restricted to executions in [from_date, to_date].
-    """
     session = get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
     suffix = suffix.strip()
+    mode = mode.strip().lower()
+    if mode not in ("psar", "ma10", "ma200"):
+        raise HTTPException(status_code=422, detail="mode must be 'psar', 'ma10', or 'ma200'")
+
     from datetime import datetime
     try:
         if from_date:
@@ -82,17 +80,15 @@ async def get_correct_executions(
     if from_date and to_date and from_date > to_date:
         raise HTTPException(status_code=422, detail="from_date must be on or before to_date")
 
-    # Version suffix (v4 = buy Q1 at bottom, sell Q1 at top). Bump when the
-    # payload shape or semantics change so stale-shaped cached rows are
-    # naturally missed, not served.
-    scope = f"__correct_exec__v4__:{from_date or ''}:{to_date or ''}"
+    mode_part = "" if mode == "psar" else f"::{mode}"
+    scope = f"__correct_exec__v4__{mode_part}:{from_date or ''}:{to_date or ''}"
     cached = get_analytics(session_id, scope, suffix)
     if cached is not None:
         return cached
 
     try:
         data = compute_correct_executions(
-            session["trades"], suffix=suffix, from_date=from_date, to_date=to_date
+            session["trades"], suffix=suffix, from_date=from_date, to_date=to_date, mode=mode
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Correct-executions failed: {e}")
@@ -100,13 +96,15 @@ async def get_correct_executions(
     set_analytics(session_id, scope, suffix, data)
     return data
 
-
 @router.get("/{session_id}/{symbol}/chart")
 async def get_chart_endpoint(
     session_id: str,
     symbol: str,
     trade_id: str = Query(..., description="Trade ID to chart"),
     suffix: str = Query(".SR", description="Yahoo Finance exchange suffix"),
+    mode: str = Query("psar", description="Indicator mode: psar | ma10 | ma200"),
+    from_date: str | None = Query(None, description="ISO date YYYY-MM-DD - widen visible window to include this range"),
+    to_date: str | None = Query(None, description="ISO date YYYY-MM-DD - widen visible window to include this range"),
 ):
     session = get_session(session_id)
     if not session:
@@ -118,21 +116,42 @@ async def get_chart_endpoint(
         raise HTTPException(status_code=404, detail=f"Trade {trade_id} / {symbol} not found")
 
     suffix = suffix.strip()
+    mode = mode.strip().lower()
+    if mode not in ("psar", "ma10", "ma200"):
+        raise HTTPException(status_code=422, detail="mode must be 'psar', 'ma10', or 'ma200'")
 
-    cached = get_chart(session_id, trade_id, symbol, suffix)
+    from datetime import datetime as _datetime
+    try:
+        if from_date:
+            _datetime.fromisoformat(from_date)
+        if to_date:
+            _datetime.fromisoformat(to_date)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="from_date/to_date must be YYYY-MM-DD")
+    if from_date and to_date and from_date > to_date:
+        raise HTTPException(status_code=422, detail="from_date must be on or before to_date")
+
+    range_part = f"::{from_date or ''}:{to_date or ''}" if (from_date or to_date) else ""
+    cache_suffix = suffix if (mode == "psar" and not range_part) else f"{suffix}::{mode}::v6{range_part}"
+
+    cached = get_chart(session_id, trade_id, symbol, cache_suffix)
     if cached is not None:
         return cached
 
     try:
-        data = build_chart_data(trades[key], suffix=suffix)
+        if mode == "ma10":
+            data = build_chart_data_ma10(trades[key], suffix=suffix, from_date=from_date, to_date=to_date)
+        elif mode == "ma200":
+            data = build_chart_data_ma200(trades[key], suffix=suffix, from_date=from_date, to_date=to_date)
+        else:
+            data = build_chart_data(trades[key], suffix=suffix, from_date=from_date, to_date=to_date)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Chart generation failed: {e}")
 
-    set_chart(session_id, trade_id, symbol, suffix, data)
+    set_chart(session_id, trade_id, symbol, cache_suffix, data)
     return data
-
 
 @router.get("/{session_id}/{symbol}/analytics")
 async def get_symbol_analytics(

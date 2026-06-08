@@ -1,15 +1,4 @@
-/**
- * Custom series primitive that draws a bounded quartile rectangle on the
- * candlestick series — the Lightweight Charts v4 free tier has no rectangle
- * primitive, so we render directly onto the chart canvas.
- *
- * Mirrors _draw_quartile_box in completed_trades_fetcher.py:
- *   - translucent fill + solid border between price_lo..price_hi
- *   - 3 dashed dividers at 25/50/75%
- *   - Q labels at the 12.5/37.5/62.5/87.5% band midpoints
- *     buy block: Q1 (bottom) → Q4 (top); sell block: Q1 (top) → Q4 (bottom)
- * bounded horizontally by left_date..right_date instead of spanning the chart.
- */
+
 import type {
   ISeriesPrimitive,
   ISeriesPrimitivePaneView,
@@ -67,17 +56,14 @@ class QuartileBoxRenderer implements ISeriesPrimitivePaneRenderer {
         const h = yBot - yTop
         if (h <= 0) continue
 
-        // translucent fill
         ctx.fillStyle = hexToRgba(box.color, 0.12)
         ctx.fillRect(x0, yTop, w, h)
 
-        // solid border
         ctx.strokeStyle = box.color
         ctx.lineWidth = 1
         ctx.setLineDash([])
         ctx.strokeRect(x0, yTop, w, h)
 
-        // 25/50/75% dividers (dashed) — q_levels already in price space
         ctx.setLineDash([4, 3])
         ctx.globalAlpha = 0.55
         for (const lvl of box.q_levels) {
@@ -91,9 +77,6 @@ class QuartileBoxRenderer implements ISeriesPrimitivePaneRenderer {
         ctx.setLineDash([])
         ctx.globalAlpha = 1
 
-        // band-midpoint Q labels. price_lo→price_hi maps bottom→top in price,
-        // i.e. high price = small y. Buy: Q1 at low price (bottom of band stack).
-        // Sell: Q1 at high price (top), so reverse label order.
         const labels = box.side === 'buy'
           ? ['Q1', 'Q2', 'Q3', 'Q4']
           : ['Q4', 'Q3', 'Q2', 'Q1']

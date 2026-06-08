@@ -57,7 +57,6 @@ export default function TradesPage({ session, suffix, onSelectTrade }: Props) {
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
-      {/* toolbar */}
       <div className="flex items-center gap-3 px-4 py-3 border-b border-border shrink-0 flex-wrap">
         <span className="text-sm text-slate-400">{filtered.length} trades</span>
         <div className="flex gap-1">
@@ -89,7 +88,6 @@ export default function TradesPage({ session, suffix, onSelectTrade }: Props) {
         </select>
       </div>
 
-      {/* table */}
       <div className="overflow-auto flex-1">
         {loading ? (
           <div className="flex items-center justify-center h-full text-slate-400 animate-pulse">

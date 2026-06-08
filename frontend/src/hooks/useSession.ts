@@ -9,7 +9,6 @@ export function useSession() {
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  // Keep a ref so upload() always sees latest suffix without being in deps
   const suffixRef = useRef(suffix)
   useEffect(() => { suffixRef.current = suffix }, [suffix])
 
@@ -18,7 +17,7 @@ export function useSession() {
       const list = await api.getSessions()
       setSessions(list)
     } catch {
-      // non-fatal
+
     }
   }, [])
 

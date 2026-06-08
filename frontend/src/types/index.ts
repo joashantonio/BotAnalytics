@@ -75,7 +75,9 @@ export interface ChartData {
   exit_date: string | null
   candles: OhlcBar[]
   volume: VolumeBar[]
-  psar: PsarPoint[]
+  psar?: PsarPoint[]
+  ma10?: PsarPoint[]
+  ma200?: PsarPoint[]
   buy_markers: Marker[]
   sell_markers: Marker[]
   avg_buy: number | null
@@ -85,6 +87,17 @@ export interface ChartData {
   sell_qty: number
   net_qty: number
   quartile_boxes: QuartileBox[]
+  quartile_levels?: {
+    upper: number
+    lower: number
+    middle: number
+    range: number
+    quartile_step: number
+    first_quartile: number
+    second_quartile: number
+    third_quartile: number
+    fourth_quartile: number
+  } | null
 }
 
 export interface Analytics {

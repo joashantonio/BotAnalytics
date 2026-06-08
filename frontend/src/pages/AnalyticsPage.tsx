@@ -17,14 +17,13 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
     onEnter(session, suffix)
   }, [session, suffix, onEnter])
 
-  // ── Correct Executions (PSAR-trend correctness, optional date range) ──────────
   const [fromDate, setFromDate] = useState('')
   const [toDate, setToDate] = useState('')
+  const [ceMode, setCeMode] = useState<'psar' | 'ma10' | 'ma200'>('psar')
   const [ce, setCe] = useState<CorrectExecutions | null>(null)
   const [ceLoading, setCeLoading] = useState(false)
   const [ceError, setCeError] = useState<string | null>(null)
 
-  // reset the range when the session changes (prior CSV's dates won't apply)
   useEffect(() => {
     setFromDate('')
     setToDate('')
@@ -32,25 +31,29 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
     setCeError(null)
   }, [session?.session_id])
 
-  const loadCorrectExecutions = async () => {
+  useEffect(() => {
     if (!session) return
+    let cancelled = false
     setCeLoading(true)
     setCeError(null)
-    try {
-      const data = await api.getCorrectExecutions(
-        session.session_id,
-        suffix,
-        fromDate || undefined,
-        toDate || undefined,
-      )
-      setCe(data)
-    } catch (e: unknown) {
-      setCeError(e instanceof Error ? e.message : 'Failed to compute correct executions')
-      setCe(null)
-    } finally {
-      setCeLoading(false)
+    api
+      .getCorrectExecutions(session.session_id, suffix, fromDate || undefined, toDate || undefined, ceMode)
+      .then((data) => {
+        if (cancelled) return
+        setCe(data)
+      })
+      .catch((e: unknown) => {
+        if (cancelled) return
+        setCeError(e instanceof Error ? e.message : 'Failed to compute correct executions')
+        setCe(null)
+      })
+      .finally(() => {
+        if (!cancelled) setCeLoading(false)
+      })
+    return () => {
+      cancelled = true
     }
-  }
+  }, [session, suffix, ceMode, fromDate, toDate])
 
   if (!session) {
     return (
@@ -77,15 +80,58 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
         {analytics && <AnalyticsDashboard analytics={analytics} />}
       </div>
 
-      {/* Correct Executions */}
       <div>
         <h2 className="text-lg font-semibold text-white mb-1">Correct Executions</h2>
         <p className="text-xs text-slate-400 mb-4">
-          A buy is “correct” when its execution date falls in a PSAR downtrend; a sell when it
-          falls in an uptrend. Optionally restrict to executions within a date range.
+          {ceMode === 'psar' ? (
+            <>A buy is “correct” when its execution date falls in a PSAR downtrend; a sell when it
+            falls in an uptrend.</>
+          ) : ceMode === 'ma10' ? (
+            <>A buy is “correct” when its execution closes below the MA10; a sell when it closes
+            above the MA10.</>
+          ) : (
+            <>A buy is “correct” when its execution closes below the MA200; a sell when it closes
+            above the MA200.</>
+          )}
+          {' '}Optionally restrict to executions within a date range.
         </p>
 
         <div className="flex flex-wrap items-end gap-3 mb-4">
+          <div className="flex flex-col gap-1 text-xs text-slate-400">
+            Indicator
+            <div className="flex rounded border border-border overflow-hidden text-xs">
+              <button
+                onClick={() => setCeMode('psar')}
+                className={`px-3 py-1.5 transition-colors ${
+                  ceMode === 'psar'
+                    ? 'bg-accent/20 text-accent font-medium'
+                    : 'bg-surface text-slate-400 hover:text-white'
+                }`}
+              >
+                PSAR
+              </button>
+              <button
+                onClick={() => setCeMode('ma10')}
+                className={`px-3 py-1.5 transition-colors border-l border-border ${
+                  ceMode === 'ma10'
+                    ? 'bg-accent/20 text-accent font-medium'
+                    : 'bg-surface text-slate-400 hover:text-white'
+                }`}
+              >
+                MA10
+              </button>
+              <button
+                onClick={() => setCeMode('ma200')}
+                className={`px-3 py-1.5 transition-colors border-l border-border ${
+                  ceMode === 'ma200'
+                    ? 'bg-accent/20 text-accent font-medium'
+                    : 'bg-surface text-slate-400 hover:text-white'
+                }`}
+              >
+                MA200
+              </button>
+            </div>
+          </div>
           <label className="flex flex-col gap-1 text-xs text-slate-400">
             From
             <input
@@ -117,13 +163,7 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
               clear
             </button>
           )}
-          <button
-            onClick={loadCorrectExecutions}
-            disabled={ceLoading}
-            className="ml-auto text-sm px-4 py-1.5 bg-accent/20 text-accent rounded font-medium hover:bg-accent/30 transition-colors disabled:opacity-40"
-          >
-            {ceLoading ? 'Computing…' : 'Compute'}
-          </button>
+          {ceLoading && <span className="ml-auto text-xs text-slate-400 animate-pulse">Computing…</span>}
         </div>
 
         {ceError && (
@@ -171,8 +211,8 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
                   Quartile of Correct Executions
                 </h3>
                 <p className="text-xs text-slate-500 mb-2">
-                  Where each correct execution landed inside its PSAR trend block (Q1 = lowest
-                  price band, Q4 = highest).
+                  Where each correct execution landed inside its {ceMode === 'psar' ? 'PSAR' : ceMode === 'ma10' ? 'MA10' : 'MA200'} trend
+                  block (Q1 = lowest price band, Q4 = highest).
                 </p>
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
