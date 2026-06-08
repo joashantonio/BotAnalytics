@@ -82,10 +82,10 @@ async def get_correct_executions(
     if from_date and to_date and from_date > to_date:
         raise HTTPException(status_code=422, detail="from_date must be on or before to_date")
 
-    # Version suffix (v4 = buy Q1 at bottom, sell Q1 at top). Bump when the
+    # Version suffix (v6 = adds per-execution `bot_type`). Bump when the
     # payload shape or semantics change so stale-shaped cached rows are
     # naturally missed, not served.
-    scope = f"__correct_exec__v4__:{from_date or ''}:{to_date or ''}"
+    scope = f"__correct_exec__v6__:{from_date or ''}:{to_date or ''}"
     cached = get_analytics(session_id, scope, suffix)
     if cached is not None:
         return cached

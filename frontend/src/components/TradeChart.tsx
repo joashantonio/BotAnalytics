@@ -10,13 +10,16 @@ import {
   type LineData,
   type Time,
 } from 'lightweight-charts'
-import type { ChartData } from '../types'
+import type { ChartData, SelectedExec } from '../types'
 import { QuartileBoxPrimitive } from './QuartileBoxPrimitive'
-import { PinMarkerPrimitive, type PinMarker } from './PinMarkerPrimitive'
+import { PinMarkerPrimitive, type PinMarker, type PinHighlight } from './PinMarkerPrimitive'
 import { ExecDateHighlightPrimitive } from './ExecDateHighlightPrimitive'
+import { SelectedExecLinePrimitive } from './SelectedExecLinePrimitive'
 
 interface Props {
   data: ChartData
+  /** Execution picked from the Executions table to emphasise; null otherwise. */
+  highlightExec?: SelectedExec | null
 }
 
 const COLORS = {
@@ -37,7 +40,7 @@ const COLORS = {
   mixed: '#1565c0',
 }
 
-export default function TradeChart({ data }: Props) {
+export default function TradeChart({ data, highlightExec }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
   const candleRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
@@ -180,9 +183,12 @@ export default function TradeChart({ data }: Props) {
         label: `S ${m.price.toFixed(2)}`,
       })),
     ]
+    const pinHighlight: PinHighlight | null = highlightExec
+      ? { time: highlightExec.date, side: highlightExec.side }
+      : null
     if (pins.length > 0) {
       candleSeries.attachPrimitive(
-        new PinMarkerPrimitive(pins, { buy: COLORS.buy, sell: COLORS.sell }),
+        new PinMarkerPrimitive(pins, { buy: COLORS.buy, sell: COLORS.sell }, pinHighlight),
       )
     }
 
@@ -205,6 +211,22 @@ export default function TradeChart({ data }: Props) {
     }))
     if (execMarks.length > 0) {
       candleSeries.attachPrimitive(new ExecDateHighlightPrimitive(execMarks))
+    }
+
+    // ── Selected-execution accent line + badge ───────────────────────────────
+    // The execution the user clicked in the Executions table: dashed vertical
+    // line through the chart at its date with a side/price badge, so a trade
+    // with many executions still shows which one was picked.
+    if (highlightExec) {
+      const color = highlightExec.side === 'buy' ? COLORS.buy : COLORS.sell
+      const sideLabel = highlightExec.side === 'buy' ? 'Buy' : 'Sell'
+      candleSeries.attachPrimitive(
+        new SelectedExecLinePrimitive({
+          time: highlightExec.date,
+          label: `${sideLabel} @ ${highlightExec.price.toFixed(4)}`,
+          color,
+        }),
+      )
     }
 
     // ── Quartile boxes as bounded rectangles ────────────────────────────────
@@ -231,7 +253,7 @@ export default function TradeChart({ data }: Props) {
       chartRef.current = null
       candleRef.current = null
     }
-  }, [data])
+  }, [data, highlightExec])
 
   return <div ref={containerRef} className="w-full h-full" />
 }

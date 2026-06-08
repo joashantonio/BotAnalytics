@@ -24,6 +24,13 @@ export interface PinMarker {
   label: string
 }
 
+/** The execution to emphasise — its pin gets a glow ring + 'selected' label.
+ * Matched by bar (time) + side; same key the pins are aggregated by. */
+export interface PinHighlight {
+  time: string
+  side: 'buy' | 'sell'
+}
+
 const HEAD_RADIUS = 11 // px — radius of the round pin head
 const HOLE_RADIUS = 4.5 // px — white hole in the head
 const TAIL_LEN = HEAD_RADIUS * 2.6 // px — tip distance from the head centre
@@ -91,6 +98,7 @@ class PinMarkerRenderer implements ISeriesPrimitivePaneRenderer {
     private _chart: IChartApi,
     private _series: ISeriesApi<'Candlestick'>,
     private _colors: { buy: string; sell: string },
+    private _highlight: PinHighlight | null,
   ) {}
 
   draw(target: { useMediaCoordinateSpace: (cb: (scope: MediaScope) => void) => void }) {
@@ -103,17 +111,27 @@ class PinMarkerRenderer implements ISeriesPrimitivePaneRenderer {
         if (x == null || y == null) continue
         const isBuy = pin.side === 'buy'
         const color = isBuy ? this._colors.buy : this._colors.sell
+        const selected =
+          this._highlight != null &&
+          this._highlight.time === pin.time &&
+          this._highlight.side === pin.side
+
+        const headCY = y - TAIL_LEN
+
         // both pins point down (tip at price, head above) like the reference
         drawPin(ctx, x, y, color, true)
 
         // price label beside the pin head (above the tip)
-        const headCY = y - TAIL_LEN
         ctx.save()
-        ctx.font = 'bold 11px sans-serif'
+        ctx.font = selected ? 'bold 12px sans-serif' : 'bold 11px sans-serif'
         ctx.textAlign = 'left'
         ctx.textBaseline = 'middle'
         ctx.fillStyle = color
-        ctx.fillText(pin.label, x + HEAD_RADIUS + 5, headCY)
+        ctx.fillText(
+          selected ? `${pin.label} ◀ selected` : pin.label,
+          x + HEAD_RADIUS + 5,
+          headCY,
+        )
         ctx.restore()
       }
     })
@@ -128,8 +146,9 @@ class PinMarkerPaneView implements ISeriesPrimitivePaneView {
     chart: IChartApi,
     series: ISeriesApi<'Candlestick'>,
     colors: { buy: string; sell: string },
+    highlight: PinHighlight | null,
   ) {
-    this._renderer = new PinMarkerRenderer(pins, chart, series, colors)
+    this._renderer = new PinMarkerRenderer(pins, chart, series, colors, highlight)
   }
 
   renderer(): ISeriesPrimitivePaneRenderer {
@@ -141,11 +160,17 @@ export class PinMarkerPrimitive implements ISeriesPrimitive<Time> {
   private _paneViews: PinMarkerPaneView[] = []
   private _pins: PinMarker[]
   private _colors: { buy: string; sell: string }
+  private _highlight: PinHighlight | null
   private _requestUpdate?: () => void
 
-  constructor(pins: PinMarker[], colors: { buy: string; sell: string }) {
+  constructor(
+    pins: PinMarker[],
+    colors: { buy: string; sell: string },
+    highlight: PinHighlight | null = null,
+  ) {
     this._pins = pins
     this._colors = colors
+    this._highlight = highlight
   }
 
   attached(param: SeriesAttachedParameter<Time>): void {
@@ -156,6 +181,7 @@ export class PinMarkerPrimitive implements ISeriesPrimitive<Time> {
         param.chart,
         param.series as ISeriesApi<'Candlestick'>,
         this._colors,
+        this._highlight,
       ),
     ]
     this._requestUpdate?.()

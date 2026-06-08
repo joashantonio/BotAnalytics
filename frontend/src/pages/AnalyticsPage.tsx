@@ -1,7 +1,14 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api/client'
-import type { Analytics, CorrectExecutions, UploadResponse } from '../types'
-import AnalyticsDashboard from '../components/AnalyticsDashboard'
+import type { Analytics, CorrectExecutions, SelectedExec, UploadResponse } from '../types'
+import AnalyticsDashboard, { SymbolBreakdown } from '../components/AnalyticsDashboard'
+import ChartModal from '../components/ChartModal'
+import { lsGet, lsSet } from '../lib/storage'
+
+// Correct-Executions date filter persists per session (survives reload + page
+// switches). Keyed by session id so each wallet keeps its own range.
+const ceDateKey = (sessionId: string | undefined, edge: 'from' | 'to') =>
+  `th:ce:${edge}:${sessionId ?? ''}`
 
 interface Props {
   session: UploadResponse | null
@@ -18,39 +25,78 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
   }, [session, suffix, onEnter])
 
   // ── Correct Executions (PSAR-trend correctness, optional date range) ──────────
-  const [fromDate, setFromDate] = useState('')
-  const [toDate, setToDate] = useState('')
+  const [fromDate, setFromDate] = useState(
+    () => lsGet(ceDateKey(session?.session_id, 'from')) ?? '',
+  )
+  const [toDate, setToDate] = useState(
+    () => lsGet(ceDateKey(session?.session_id, 'to')) ?? '',
+  )
   const [ce, setCe] = useState<CorrectExecutions | null>(null)
   const [ceLoading, setCeLoading] = useState(false)
   const [ceError, setCeError] = useState<string | null>(null)
+  const [execFilter, setExecFilter] = useState<'all' | 'correct' | 'wrong'>('all')
+  const [execPage, setExecPage] = useState(0)
+  const EXEC_PAGE_SIZE = 10
 
-  // reset the range when the session changes (prior CSV's dates won't apply)
+  // Execution chart modal — opened by clicking a row in the executions table.
+  const [chartModal, setChartModal] = useState<{
+    symbol: string
+    tradeId: string
+    exec: SelectedExec
+  } | null>(null)
+
+  // back to first page whenever the filter or the underlying data changes
   useEffect(() => {
-    setFromDate('')
-    setToDate('')
+    setExecPage(0)
+  }, [execFilter, ce])
+
+  const openChart = (symbol: string, tradeId: string, exec: SelectedExec) => {
+    setChartModal({ symbol, tradeId, exec })
+  }
+
+  // On session change, load that wallet's persisted range (prior CSV's dates
+  // won't apply, but each session keeps its own saved range across reloads).
+  useEffect(() => {
+    setFromDate(lsGet(ceDateKey(session?.session_id, 'from')) ?? '')
+    setToDate(lsGet(ceDateKey(session?.session_id, 'to')) ?? '')
     setCe(null)
     setCeError(null)
   }, [session?.session_id])
 
-  const loadCorrectExecutions = async () => {
+  // Persist the range whenever it changes, tagged with the active session.
+  useEffect(() => {
+    lsSet(ceDateKey(session?.session_id, 'from'), fromDate || null)
+    lsSet(ceDateKey(session?.session_id, 'to'), toDate || null)
+  }, [fromDate, toDate, session?.session_id])
+
+  // auto-compute whenever the session, suffix, or date range changes
+  useEffect(() => {
     if (!session) return
+    let cancelled = false
     setCeLoading(true)
     setCeError(null)
-    try {
-      const data = await api.getCorrectExecutions(
+    api
+      .getCorrectExecutions(
         session.session_id,
         suffix,
         fromDate || undefined,
         toDate || undefined,
       )
-      setCe(data)
-    } catch (e: unknown) {
-      setCeError(e instanceof Error ? e.message : 'Failed to compute correct executions')
-      setCe(null)
-    } finally {
-      setCeLoading(false)
+      .then((data) => {
+        if (!cancelled) setCe(data)
+      })
+      .catch((e: unknown) => {
+        if (cancelled) return
+        setCeError(e instanceof Error ? e.message : 'Failed to compute correct executions')
+        setCe(null)
+      })
+      .finally(() => {
+        if (!cancelled) setCeLoading(false)
+      })
+    return () => {
+      cancelled = true
     }
-  }
+  }, [session, suffix, fromDate, toDate])
 
   if (!session) {
     return (
@@ -74,12 +120,12 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
             {error}
           </div>
         )}
-        {analytics && <AnalyticsDashboard analytics={analytics} />}
+        {analytics && <AnalyticsDashboard analytics={analytics} showSymbolBreakdown={false} />}
       </div>
 
       {/* Correct Executions */}
       <div>
-        <h2 className="text-lg font-semibold text-white mb-1">Correct Executions</h2>
+        <h2 className="text-lg font-semibold text-white mb-1">Executions</h2>
         <p className="text-xs text-slate-400 mb-4">
           A buy is “correct” when its execution date falls in a PSAR downtrend; a sell when it
           falls in an uptrend. Optionally restrict to executions within a date range.
@@ -117,13 +163,9 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
               clear
             </button>
           )}
-          <button
-            onClick={loadCorrectExecutions}
-            disabled={ceLoading}
-            className="ml-auto text-sm px-4 py-1.5 bg-accent/20 text-accent rounded font-medium hover:bg-accent/30 transition-colors disabled:opacity-40"
-          >
-            {ceLoading ? 'Computing…' : 'Compute'}
-          </button>
+          {ceLoading && (
+            <span className="ml-auto text-sm text-slate-400 animate-pulse pb-2">Computing…</span>
+          )}
         </div>
 
         {ceError && (
@@ -208,6 +250,148 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
                 </div>
               </div>
             )}
+            {ce.executions.length > 0 && (() => {
+              const filtered = ce.executions.filter((e) =>
+                execFilter === 'all'
+                  ? true
+                  : execFilter === 'correct'
+                    ? e.correct
+                    : !e.correct,
+              )
+              const pageCount = Math.max(1, Math.ceil(filtered.length / EXEC_PAGE_SIZE))
+              const page = Math.min(execPage, pageCount - 1)
+              const start = page * EXEC_PAGE_SIZE
+              const pageRows = filtered.slice(start, start + EXEC_PAGE_SIZE)
+              return (
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <h3 className="text-sm font-medium text-slate-400 uppercase tracking-wide">
+                      Inspect Execution on Chart
+                    </h3>
+                    <div className="flex gap-1 text-xs">
+                      {(['all', 'correct', 'wrong'] as const).map((f) => (
+                        <button
+                          key={f}
+                          onClick={() => setExecFilter(f)}
+                          className={`px-2 py-1 rounded capitalize transition-colors ${
+                            execFilter === f
+                              ? 'bg-accent/20 text-accent font-medium'
+                              : 'text-slate-400 hover:text-white'
+                          }`}
+                        >
+                          {f}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <p className="text-xs text-slate-500 mb-2">
+                    Click an execution to view its trade chart.
+                  </p>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="text-slate-400 border-b border-border">
+                          <th className="text-left py-2 pr-4">Date</th>
+                          <th className="text-left py-2 pr-4">Symbol</th>
+                          <th className="text-left py-2 pr-4">Bot Type</th>
+                          <th className="text-left py-2 pr-4">Trade</th>
+                          <th className="text-left py-2 pr-4">Side</th>
+                          <th className="text-right py-2 pr-4">Price</th>
+                          <th className="text-right py-2 pr-4">Qty</th>
+                          <th className="text-center py-2 pr-4">Quartile</th>
+                          <th className="text-center py-2">Result</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {pageRows.map((e, i) => (
+                          <tr
+                            key={`${e.trade_id}_${e.symbol}_${e.side}_${e.exec_date}_${start + i}`}
+                            onClick={() =>
+                              openChart(e.symbol, e.trade_id, {
+                                date: e.exec_date,
+                                side: e.side,
+                                price: e.exec_price,
+                              })
+                            }
+                            className="border-b border-border/50 hover:bg-panel/60 cursor-pointer"
+                          >
+                            <td className="py-2 pr-4 text-slate-300 whitespace-nowrap">{e.exec_date}</td>
+                            <td className="py-2 pr-4 font-mono font-medium text-white">{e.symbol}</td>
+                            <td className="py-2 pr-4 text-slate-300">{e.bot_type || '—'}</td>
+                            <td className="py-2 pr-4 text-slate-400">{e.trade_id}</td>
+                            <td
+                              className={`py-2 pr-4 font-medium ${e.side === 'buy' ? 'text-avgbuy' : 'text-avgsell'}`}
+                            >
+                              {e.side === 'buy' ? 'Buy' : 'Sell'}
+                            </td>
+                            <td className="text-right py-2 pr-4 font-mono text-slate-300">
+                              {e.exec_price.toFixed(4)}
+                            </td>
+                            <td className="text-right py-2 pr-4 tabular-nums text-slate-400">
+                              {e.qty}
+                            </td>
+                            <td className="text-center py-2 pr-4 tabular-nums text-slate-400">
+                              {e.quartile != null ? `Q${e.quartile}` : '—'}
+                            </td>
+                            <td className="text-center py-2">
+                              <span
+                                className={`text-xs px-2 py-0.5 rounded font-medium ${
+                                  e.correct ? 'bg-buy/10 text-buy' : 'bg-sell/10 text-sell'
+                                }`}
+                              >
+                                {e.correct ? 'Correct' : 'Wrong'}
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* pagination */}
+                  <div className="flex items-center justify-between mt-3 text-xs text-slate-400">
+                    <span>
+                      {filtered.length === 0
+                        ? 'No executions'
+                        : `${start + 1}–${start + pageRows.length} of ${filtered.length}`}
+                    </span>
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => setExecPage(0)}
+                        disabled={page <= 0}
+                        className="px-2 py-1 rounded border border-border hover:bg-panel disabled:opacity-30 disabled:cursor-not-allowed"
+                      >
+                        « First
+                      </button>
+                      <button
+                        onClick={() => setExecPage((p) => Math.max(0, p - 1))}
+                        disabled={page <= 0}
+                        className="px-2 py-1 rounded border border-border hover:bg-panel disabled:opacity-30 disabled:cursor-not-allowed"
+                      >
+                        ‹ Prev
+                      </button>
+                      <span className="px-2 text-slate-300">
+                        Page {page + 1} / {pageCount}
+                      </span>
+                      <button
+                        onClick={() => setExecPage((p) => Math.min(pageCount - 1, p + 1))}
+                        disabled={page >= pageCount - 1}
+                        className="px-2 py-1 rounded border border-border hover:bg-panel disabled:opacity-30 disabled:cursor-not-allowed"
+                      >
+                        Next ›
+                      </button>
+                      <button
+                        onClick={() => setExecPage(pageCount - 1)}
+                        disabled={page >= pageCount - 1}
+                        className="px-2 py-1 rounded border border-border hover:bg-panel disabled:opacity-30 disabled:cursor-not-allowed"
+                      >
+                        Last »
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )
+            })()}
             {ce.total_executions === 0 && (
               <p className="text-slate-500 text-sm">No executions in the selected range.</p>
             )}
@@ -219,7 +403,19 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
           </div>
         )}
       </div>
+
+      {analytics && <SymbolBreakdown analytics={analytics} />}
     </div>
+    {chartModal && session && (
+      <ChartModal
+        sessionId={session.session_id}
+        suffix={suffix}
+        symbol={chartModal.symbol}
+        tradeId={chartModal.tradeId}
+        exec={chartModal.exec}
+        onClose={() => setChartModal(null)}
+      />
+    )}
     </div>
   )
 }

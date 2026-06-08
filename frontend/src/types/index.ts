@@ -102,6 +102,27 @@ export interface Analytics {
   symbol?: string
 }
 
+/** A single execution picked from the Executions table, threaded through to the
+ * chart so it can highlight the matching pin. `side` + `date` identify the bar;
+ * `price` is shown in the badge label. */
+export interface SelectedExec {
+  date: string
+  side: 'buy' | 'sell'
+  price: number
+}
+
+export interface Execution {
+  trade_id: string
+  symbol: string
+  side: 'buy' | 'sell'
+  exec_price: number
+  exec_date: string
+  qty: number
+  bot_type: string
+  correct: boolean
+  quartile: number | null
+}
+
 export interface CorrectExecutions {
   total_executions: number
   correct_executions: number
@@ -118,6 +139,7 @@ export interface CorrectExecutions {
   quartiles: Record<'1' | '2' | '3' | '4', number>
   buy_quartiles: Record<'1' | '2' | '3' | '4', number>
   sell_quartiles: Record<'1' | '2' | '3' | '4', number>
+  executions: Execution[]
 }
 
 export interface SymbolBreakdown {

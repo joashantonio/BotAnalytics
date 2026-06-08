@@ -1,4 +1,4 @@
-import { useRef, type DragEvent, type ChangeEvent } from 'react'
+import { useEffect, useRef, useState, type DragEvent, type ChangeEvent } from 'react'
 import type { PrefetchStatusResponse, SessionInfo, UploadResponse } from '../types'
 
 interface Props {
@@ -12,6 +12,7 @@ interface Props {
   onClear: () => void
   onSelectSession: (sessionId: string) => void
   onDeleteSession: (sessionId: string) => void
+  onRefresh: () => void
   prefetchStatus: PrefetchStatusResponse | null
 }
 
@@ -26,9 +27,28 @@ export default function UploadPage({
   onClear,
   onSelectSession,
   onDeleteSession,
+  onRefresh,
   prefetchStatus,
 }: Props) {
   const inputRef = useRef<HTMLInputElement>(null)
+  // Session pending delete confirmation; null when no dialog is open.
+  const [pendingDelete, setPendingDelete] = useState<SessionInfo | null>(null)
+
+  // Always refresh the saved-files library when the Upload page is shown, so
+  // the list reflects the DB even if the app-boot fetch missed (backend booting).
+  useEffect(() => {
+    onRefresh()
+  }, [onRefresh])
+
+  // Esc closes the delete confirmation dialog.
+  useEffect(() => {
+    if (!pendingDelete) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setPendingDelete(null)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [pendingDelete])
 
   const handleFiles = (raw: FileList | File[]) => {
     const files = Array.from(raw).filter((f) => f.name.toLowerCase().endsWith('.csv'))
@@ -121,7 +141,7 @@ export default function UploadPage({
                     </div>
                   </button>
                   <button
-                    onClick={(e) => { e.stopPropagation(); onDeleteSession(s.session_id) }}
+                    onClick={(e) => { e.stopPropagation(); setPendingDelete(s) }}
                     className="ml-3 shrink-0 text-xs text-slate-500 hover:text-red-400 transition-colors border border-border hover:border-red-700/50 px-2 py-1 rounded"
                     title="Delete this CSV"
                   >
@@ -231,6 +251,45 @@ export default function UploadPage({
         </div>
       )}
     </div>
+
+    {/* delete confirmation dialog */}
+    {pendingDelete && (
+      <div
+        className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+        onClick={() => setPendingDelete(null)}
+      >
+        <div
+          className="bg-panel border border-border rounded-xl p-6 w-full max-w-sm mx-4 space-y-4 shadow-xl"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div>
+            <h3 className="text-white font-semibold text-base">Delete file?</h3>
+            <p className="text-slate-400 text-sm mt-1">
+              Permanently delete{' '}
+              <span className="text-white font-medium">{pendingDelete.filename}</span> and its
+              cached data. This cannot be undone.
+            </p>
+          </div>
+          <div className="flex justify-end gap-2">
+            <button
+              onClick={() => setPendingDelete(null)}
+              className="text-sm text-slate-300 hover:text-white border border-border px-3 py-1.5 rounded transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={() => {
+                onDeleteSession(pendingDelete.session_id)
+                setPendingDelete(null)
+              }}
+              className="text-sm text-white bg-red-700 hover:bg-red-600 px-3 py-1.5 rounded transition-colors"
+            >
+              Delete
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
     </div>
   )
 }

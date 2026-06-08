@@ -366,9 +366,11 @@ def compute_correct_executions(
     # is path-dependent from index 0, so the trend sign at a given date only
     # agrees with the chart if both use the same (entry-120d, exit+120d) window.
     by_symbol: dict[str, dict] = {}
-    for (_, sym), info in trades.items():
+    for (tid, sym), info in trades.items():
         g = by_symbol.setdefault(sym, {"orders": [], "entries": [], "exits": []})
-        g["orders"].extend(info["orders"])
+        # carry the trade_id alongside each order so the per-execution rows can
+        # link back to the trade's chart.
+        g["orders"].extend((tid, o) for o in info["orders"])
         if info["entry_date"]:
             g["entries"].append(info["entry_date"])
         exit_d = info.get("exit_date") or pd.Timestamp.today().strftime("%Y-%m-%d")
@@ -383,11 +385,14 @@ def compute_correct_executions(
     quartiles = {1: 0, 2: 0, 3: 0, 4: 0}
     buy_quartiles = {1: 0, 2: 0, 3: 0, 4: 0}
     sell_quartiles = {1: 0, 2: 0, 3: 0, 4: 0}
+    # per-execution detail rows so the UI can list correct/wrong executions and
+    # link each to its trade chart.
+    executions: list[dict] = []
 
     for sym, g in by_symbol.items():
         # executions in range for this symbol
         rel = []
-        for o in g["orders"]:
+        for tid, o in g["orders"]:
             if o["exec_price"] is None:
                 continue
             ed = _exec_date(o)
@@ -395,7 +400,7 @@ def compute_correct_executions(
                 continue
             if range_to is not None and ed > range_to:
                 continue
-            rel.append((ed, o))
+            rel.append((ed, tid, o))
         if not rel or not g["entries"]:
             continue
 
@@ -415,13 +420,15 @@ def compute_correct_executions(
         dates = df_wide.index
         n_w = len(df_wide)
 
-        for ed, o in rel:
+        for ed, tid, o in rel:
             i_w = int(np.searchsorted(dates, ed, side="left"))
             i_w = min(i_w, n_w - 1)
             trend = trend_w[i_w]
             is_buy = o["side"] == "1"
             # buy wants downtrend (-1); sell wants uptrend (+1)
-            ok = (is_buy and trend == -1) or (not is_buy and trend == 1)
+            # cast to Python bool: `trend` is a numpy int so the comparison
+            # yields numpy.bool_, which json.dumps can't serialize.
+            ok = bool((is_buy and trend == -1) or (not is_buy and trend == 1))
             total += 1
             if is_buy:
                 buy_total += 1
@@ -431,6 +438,7 @@ def compute_correct_executions(
                 sell_total += 1
                 if ok:
                     sell_correct += 1
+            row_q: int | None = None
             if ok:
                 correct += 1
                 # quartile of the exec price within its trend block (chart box geometry)
@@ -448,11 +456,25 @@ def compute_correct_executions(
                 # for sells Q1 is the TOP (high sell price = Q1), so invert.
                 if not is_buy:
                     q = 5 - q
+                q = int(q)
+                row_q = q
                 quartiles[q] += 1
                 if is_buy:
                     buy_quartiles[q] += 1
                 else:
                     sell_quartiles[q] += 1
+
+            executions.append({
+                "trade_id": tid,
+                "symbol": sym,
+                "side": "buy" if is_buy else "sell",
+                "exec_price": round(float(o["exec_price"]), 4),
+                "exec_date": ed.strftime("%Y-%m-%d"),
+                "qty": o["qty"],
+                "bot_type": o.get("bot_type") or "",
+                "correct": ok,
+                "quartile": row_q,
+            })
 
     return {
         "total_executions": total,
@@ -471,4 +493,6 @@ def compute_correct_executions(
         "quartiles": {str(k): v for k, v in quartiles.items()},
         "buy_quartiles": {str(k): v for k, v in buy_quartiles.items()},
         "sell_quartiles": {str(k): v for k, v in sell_quartiles.items()},
+        # per-execution rows, sorted by date then symbol, for the drill-down UI
+        "executions": sorted(executions, key=lambda e: (e["exec_date"], e["symbol"])),
     }

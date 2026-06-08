@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api/client'
-import type { TradeRow, UploadResponse } from '../types'
+import type { SelectedExec, TradeRow, UploadResponse } from '../types'
 import TradeChart from '../components/TradeChart'
 import { useChart } from '../hooks/useChart'
 
@@ -9,7 +9,8 @@ interface Props {
   suffix: string
   selectedSymbol: string | null
   selectedTradeId: string | null
-  onSelectTrade: (symbol: string, tradeId: string) => void
+  selectedExec: SelectedExec | null
+  onSelectTrade: (symbol: string, tradeId: string, exec?: SelectedExec) => void
 }
 
 export default function ChartPage({
@@ -17,6 +18,7 @@ export default function ChartPage({
   suffix,
   selectedSymbol,
   selectedTradeId,
+  selectedExec,
   onSelectTrade,
 }: Props) {
   const [trades, setTrades] = useState<TradeRow[]>([])
@@ -226,7 +228,7 @@ export default function ChartPage({
               <p className="text-slate-500 text-sm">Select a trade from the sidebar</p>
             </div>
           )}
-          {data && <TradeChart data={data} />}
+          {data && <TradeChart data={data} highlightExec={selectedExec} />}
         </div>
       </div>
     </div>

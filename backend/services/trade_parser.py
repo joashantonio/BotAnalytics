@@ -37,6 +37,8 @@ def parse_trades(content: bytes, source_name: str = "upload") -> dict[tuple, dic
         side = row["Side"].strip()
         ep_raw = row["Execution Price"].strip()
         dt_raw = row["Execution Date"].strip()
+        # "Bot" column (e.g. "Maard", "Bears Bot"); optional for older CSVs.
+        bot_type = (row.get("Bot") or "").strip()
 
         if not qty_raw or not dt_raw:
             continue
@@ -59,6 +61,7 @@ def parse_trades(content: bytes, source_name: str = "upload") -> dict[tuple, dic
             "exec_date": dt,
             "exec_price": exec_price,
             "qty": qty,
+            "bot_type": bot_type,
         })
 
     trades = {}
