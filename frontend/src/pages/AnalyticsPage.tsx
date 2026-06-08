@@ -296,7 +296,7 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
                 </div>
               </div>
             )}
-            {ce.executions.length > 0 && (() => {
+            {ce.executions && ce.executions.length > 0 && (() => {
               const filtered = ce.executions.filter((e) =>
                 execFilter === 'all'
                   ? true

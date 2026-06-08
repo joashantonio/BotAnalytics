@@ -848,6 +848,8 @@ def compute_correct_executions(
         "quartiles": {str(k): v for k, v in quartiles.items()},
         "buy_quartiles": {str(k): v for k, v in buy_quartiles.items()},
         "sell_quartiles": {str(k): v for k, v in sell_quartiles.items()},
+        # per-execution rows, sorted by date then symbol, for the drill-down UI
+        "executions": sorted(executions, key=lambda e: (e["exec_date"], e["symbol"])),
     }
 
 def _compute_correct_executions_ma10(
@@ -861,9 +863,9 @@ def _compute_correct_executions_ma10(
     range_to = pd.Timestamp(to_date) if to_date else None
 
     by_symbol: dict[str, dict] = {}
-    for (_, sym), info in trades.items():
+    for (tid, sym), info in trades.items():
         g = by_symbol.setdefault(sym, {"orders": [], "entries": [], "exits": []})
-        g["orders"].extend(info["orders"])
+        g["orders"].extend((tid, o) for o in info["orders"])
         if info["entry_date"]:
             g["entries"].append(info["entry_date"])
         exit_d = info.get("exit_date") or pd.Timestamp.today().strftime("%Y-%m-%d")
@@ -876,10 +878,13 @@ def _compute_correct_executions_ma10(
     quartiles = {1: 0, 2: 0, 3: 0, 4: 0}
     buy_quartiles = {1: 0, 2: 0, 3: 0, 4: 0}
     sell_quartiles = {1: 0, 2: 0, 3: 0, 4: 0}
+    # per-execution detail rows so the UI can list correct/wrong executions and
+    # link each to its trade chart (same shape as the psar path).
+    executions: list[dict] = []
 
     for sym, g in by_symbol.items():
         rel = []
-        for o in g["orders"]:
+        for tid, o in g["orders"]:
             if o["exec_price"] is None:
                 continue
             ed = _exec_date(o)
@@ -887,7 +892,7 @@ def _compute_correct_executions_ma10(
                 continue
             if range_to is not None and ed > range_to:
                 continue
-            rel.append((ed, o))
+            rel.append((ed, tid, o))
         if not rel or not g["entries"]:
             continue
 
@@ -909,7 +914,7 @@ def _compute_correct_executions_ma10(
         dates = df_wide.index
         n_w = len(df_wide)
 
-        for ed, o in rel:
+        for ed, tid, o in rel:
             i_w = int(np.searchsorted(dates, ed, side="left"))
             i_w = min(i_w, n_w - 1)
             is_buy = o["side"] == "1"
@@ -917,7 +922,8 @@ def _compute_correct_executions_ma10(
             ma = ma_w[i_w]
             if np.isnan(ma):
                 continue
-            ok = (is_buy and close < ma) or (not is_buy and close > ma)
+            # cast to Python bool: numpy.bool_ isn't JSON-serializable.
+            ok = bool((is_buy and close < ma) or (not is_buy and close > ma))
             total += 1
             if is_buy:
                 buy_total += 1
@@ -927,6 +933,7 @@ def _compute_correct_executions_ma10(
                 sell_total += 1
                 if ok:
                     sell_correct += 1
+            row_q: int | None = None
             if ok:
                 correct += 1
                 expected_trend = -1 if is_buy else 1
@@ -938,11 +945,25 @@ def _compute_correct_executions_ma10(
                         q = ma10_mod.get_quartile(float(o["exec_price"]), price_lo, price_hi)
                         if not is_buy:
                             q = 5 - q
+                        q = int(q)
+                        row_q = q
                         quartiles[q] += 1
                         if is_buy:
                             buy_quartiles[q] += 1
                         else:
                             sell_quartiles[q] += 1
+
+            executions.append({
+                "trade_id": tid,
+                "symbol": sym,
+                "side": "buy" if is_buy else "sell",
+                "exec_price": round(float(o["exec_price"]), 4),
+                "exec_date": ed.strftime("%Y-%m-%d"),
+                "qty": o["qty"],
+                "bot_type": o.get("bot_type") or "",
+                "correct": ok,
+                "quartile": row_q,
+            })
 
     return {
         "total_executions": total,
@@ -960,6 +981,8 @@ def _compute_correct_executions_ma10(
         "quartiles": {str(k): v for k, v in quartiles.items()},
         "buy_quartiles": {str(k): v for k, v in buy_quartiles.items()},
         "sell_quartiles": {str(k): v for k, v in sell_quartiles.items()},
+        # per-execution rows, sorted by date then symbol, for the drill-down UI
+        "executions": sorted(executions, key=lambda e: (e["exec_date"], e["symbol"])),
     }
 
 def _compute_correct_executions_ma200(
@@ -973,9 +996,9 @@ def _compute_correct_executions_ma200(
     range_to = pd.Timestamp(to_date) if to_date else None
 
     by_symbol: dict[str, dict] = {}
-    for (_, sym), info in trades.items():
+    for (tid, sym), info in trades.items():
         g = by_symbol.setdefault(sym, {"orders": [], "entries": [], "exits": []})
-        g["orders"].extend(info["orders"])
+        g["orders"].extend((tid, o) for o in info["orders"])
         if info["entry_date"]:
             g["entries"].append(info["entry_date"])
         exit_d = info.get("exit_date") or pd.Timestamp.today().strftime("%Y-%m-%d")
@@ -988,10 +1011,13 @@ def _compute_correct_executions_ma200(
     quartiles = {1: 0, 2: 0, 3: 0, 4: 0}
     buy_quartiles = {1: 0, 2: 0, 3: 0, 4: 0}
     sell_quartiles = {1: 0, 2: 0, 3: 0, 4: 0}
+    # per-execution detail rows so the UI can list correct/wrong executions and
+    # link each to its trade chart (same shape as the psar path).
+    executions: list[dict] = []
 
     for sym, g in by_symbol.items():
         rel = []
-        for o in g["orders"]:
+        for tid, o in g["orders"]:
             if o["exec_price"] is None:
                 continue
             ed = _exec_date(o)
@@ -999,7 +1025,7 @@ def _compute_correct_executions_ma200(
                 continue
             if range_to is not None and ed > range_to:
                 continue
-            rel.append((ed, o))
+            rel.append((ed, tid, o))
         if not rel or not g["entries"]:
             continue
 
@@ -1021,7 +1047,7 @@ def _compute_correct_executions_ma200(
         dates = df_wide.index
         n_w = len(df_wide)
 
-        for ed, o in rel:
+        for ed, tid, o in rel:
             i_w = int(np.searchsorted(dates, ed, side="left"))
             i_w = min(i_w, n_w - 1)
             is_buy = o["side"] == "1"
@@ -1029,7 +1055,8 @@ def _compute_correct_executions_ma200(
             ma = ma_w[i_w]
             if np.isnan(ma):
                 continue
-            ok = (is_buy and close < ma) or (not is_buy and close > ma)
+            # cast to Python bool: numpy.bool_ isn't JSON-serializable.
+            ok = bool((is_buy and close < ma) or (not is_buy and close > ma))
             total += 1
             if is_buy:
                 buy_total += 1
@@ -1039,6 +1066,7 @@ def _compute_correct_executions_ma200(
                 sell_total += 1
                 if ok:
                     sell_correct += 1
+            row_q: int | None = None
             if ok:
                 correct += 1
                 expected_trend = -1 if is_buy else 1
@@ -1050,11 +1078,25 @@ def _compute_correct_executions_ma200(
                         q = ma200_mod.get_quartile(float(o["exec_price"]), price_lo, price_hi)
                         if not is_buy:
                             q = 5 - q
+                        q = int(q)
+                        row_q = q
                         quartiles[q] += 1
                         if is_buy:
                             buy_quartiles[q] += 1
                         else:
                             sell_quartiles[q] += 1
+
+            executions.append({
+                "trade_id": tid,
+                "symbol": sym,
+                "side": "buy" if is_buy else "sell",
+                "exec_price": round(float(o["exec_price"]), 4),
+                "exec_date": ed.strftime("%Y-%m-%d"),
+                "qty": o["qty"],
+                "bot_type": o.get("bot_type") or "",
+                "correct": ok,
+                "quartile": row_q,
+            })
 
     return {
         "total_executions": total,
