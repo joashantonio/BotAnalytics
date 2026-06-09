@@ -32,7 +32,11 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
     () => lsGet(ceDateKey(session?.session_id, 'to')) ?? '',
   )
   // Indicator the correctness check is scored against: PSAR trend, or MA10/MA200 cross.
-  const [ceMode, setCeMode] = useState<'psar' | 'ma10' | 'ma200'>('psar')
+  // 'bearsbot' has no backend scoring logic yet — it reuses the ma10 fetch for row
+  // data and filters by bot_type only; its chart has no plot (see ChartModal).
+  const [ceMode, setCeMode] = useState<'psar' | 'bearsbot' | 'ma10' | 'ma200'>('psar')
+  // Backend correctness/chart mode — bearsbot has none, so borrow ma10's.
+  const fetchMode = ceMode === 'bearsbot' ? 'ma10' : ceMode
   const [ce, setCe] = useState<CorrectExecutions | null>(null)
   const [ceLoading, setCeLoading] = useState(false)
   const [ceError, setCeError] = useState<string | null>(null)
@@ -83,7 +87,7 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
         suffix,
         fromDate || undefined,
         toDate || undefined,
-        ceMode,
+        fetchMode,
       )
       .then((data) => {
         if (!cancelled) setCe(data)
@@ -99,7 +103,7 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
     return () => {
       cancelled = true
     }
-  }, [session, suffix, ceMode, fromDate, toDate])
+  }, [session, suffix, fetchMode, fromDate, toDate])
 
   if (!session) {
     return (
@@ -130,11 +134,14 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
         <h2 className="text-lg font-semibold text-white mb-1">Executions</h2>
         <p className="text-xs text-slate-400 mb-4">
           {ceMode === 'psar' ? (
-            <>A buy is “correct” when its execution date falls in a PSAR downtrend; a sell when it
-            falls in an uptrend.</>
+            <>A buy is “correct” when its execution date falls in a Maard Bot downtrend; a sell when
+            it falls in an uptrend.</>
+          ) : ceMode === 'bearsbot' ? (
+            <>Bears Bot executions. Correctness/plot logic not defined yet — rows shown for
+            inspection only.</>
           ) : ceMode === 'ma10' ? (
-            <>A buy is “correct” when its execution closes below the MA10; a sell when it closes
-            above the MA10.</>
+            <>A buy is “correct” when its execution closes below the Bears Bot Booster line; a sell
+            when it closes above it.</>
           ) : (
             <>A buy is “correct” when its execution closes below the MA200; a sell when it closes
             above the MA200.</>
@@ -154,7 +161,17 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
                     : 'bg-surface text-slate-400 hover:text-white'
                 }`}
               >
-                PSAR
+                Maard Bot
+              </button>
+              <button
+                onClick={() => setCeMode('bearsbot')}
+                className={`px-3 py-1.5 transition-colors border-l border-border ${
+                  ceMode === 'bearsbot'
+                    ? 'bg-accent/20 text-accent font-medium'
+                    : 'bg-surface text-slate-400 hover:text-white'
+                }`}
+              >
+                Bears Bot
               </button>
               <button
                 onClick={() => setCeMode('ma10')}
@@ -164,17 +181,7 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
                     : 'bg-surface text-slate-400 hover:text-white'
                 }`}
               >
-                MA10
-              </button>
-              <button
-                onClick={() => setCeMode('ma200')}
-                className={`px-3 py-1.5 transition-colors border-l border-border ${
-                  ceMode === 'ma200'
-                    ? 'bg-accent/20 text-accent font-medium'
-                    : 'bg-surface text-slate-400 hover:text-white'
-                }`}
-              >
-                MA200
+                Bears Bot Booster
               </button>
             </div>
           </div>
@@ -220,46 +227,56 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
           </div>
         )}
 
-        {ce && (
+        {ce && (() => {
+          // Bears Bot has no correctness logic yet — force all correctness metrics to 0
+          // and hide the quartile breakdown. The executions table still lists its rows.
+          const isBearsBot = ceMode === 'bearsbot'
+          const correctPct = isBearsBot ? 0 : ce.correct_pct
+          const buyPct = isBearsBot ? 0 : ce.buy_pct
+          const sellPct = isBearsBot ? 0 : ce.sell_pct
+          const correctExecutions = isBearsBot ? 0 : ce.correct_executions
+          const buyCorrect = isBearsBot ? 0 : ce.buy_correct
+          const sellCorrect = isBearsBot ? 0 : ce.sell_correct
+          return (
           <div className="space-y-3">
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
               <div className="bg-panel border border-border rounded-lg p-4 flex flex-col gap-1">
                 <span className="text-xs text-slate-400 uppercase tracking-wide">Correct %</span>
                 <span
-                  className={`text-2xl font-semibold tabular-nums ${ce.correct_pct >= 50 ? 'text-buy' : 'text-sell'}`}
+                  className={`text-2xl font-semibold tabular-nums ${correctPct >= 50 ? 'text-buy' : 'text-sell'}`}
                 >
-                  {ce.correct_pct.toFixed(1)}%
+                  {correctPct.toFixed(1)}%
                 </span>
                 <span className="text-xs text-slate-500">
-                  {ce.correct_executions} / {ce.total_executions} executions
+                  {correctExecutions} / {ce.total_executions} executions
                 </span>
               </div>
               <div className="bg-panel border border-border rounded-lg p-4 flex flex-col gap-1">
                 <span className="text-xs text-slate-400 uppercase tracking-wide">Buys correct</span>
                 <span className="text-2xl font-semibold tabular-nums text-avgbuy">
-                  {ce.buy_pct.toFixed(1)}%
+                  {buyPct.toFixed(1)}%
                 </span>
                 <span className="text-xs text-slate-500">
-                  {ce.buy_correct} / {ce.buy_total} buys
+                  {buyCorrect} / {ce.buy_total} buys
                 </span>
               </div>
               <div className="bg-panel border border-border rounded-lg p-4 flex flex-col gap-1">
                 <span className="text-xs text-slate-400 uppercase tracking-wide">Sells correct</span>
                 <span className="text-2xl font-semibold tabular-nums text-avgsell">
-                  {ce.sell_pct.toFixed(1)}%
+                  {sellPct.toFixed(1)}%
                 </span>
                 <span className="text-xs text-slate-500">
-                  {ce.sell_correct} / {ce.sell_total} sells
+                  {sellCorrect} / {ce.sell_total} sells
                 </span>
               </div>
             </div>
-            {ce.correct_executions > 0 && ce.quartiles && (
+            {!isBearsBot && ce.correct_executions > 0 && ce.quartiles && (
               <div>
                 <h3 className="text-sm font-medium text-slate-400 mb-2 uppercase tracking-wide">
                   Quartile of Correct Executions
                 </h3>
                 <p className="text-xs text-slate-500 mb-2">
-                  Where each correct execution landed inside its {ceMode === 'psar' ? 'PSAR' : ceMode === 'ma10' ? 'MA10' : 'MA200'} trend
+                  Where each correct execution landed inside its {ceMode === 'psar' ? 'Maard Bot' : ceMode === 'ma10' ? 'Bears Bot Booster' : 'MA200'} trend
                   block (Q1 = lowest price band, Q4 = highest).
                 </p>
                 <div className="overflow-x-auto">
@@ -297,13 +314,24 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
               </div>
             )}
             {ce.executions && ce.executions.length > 0 && (() => {
-              const filtered = ce.executions.filter((e) =>
-                execFilter === 'all'
+              // Bot-type the active indicator maps to. "Bears Bot" and "Bears Bot Booster"
+              // overlap, so Bears Bot must exclude any "booster". Case-insensitive substring —
+              // CSV "Bot" values vary ("Bears Bot Booster", "MAArD", etc).
+              const botMatches = (raw: string) => {
+                const bt = (raw || '').toLowerCase()
+                if (ceMode === 'psar') return bt.includes('maard')
+                if (ceMode === 'bearsbot') return bt.includes('bears bot') && !bt.includes('booster')
+                if (ceMode === 'ma10') return bt.includes('booster')
+                return true
+              }
+              const filtered = ce.executions.filter((e) => {
+                if (!botMatches(e.bot_type)) return false
+                return execFilter === 'all'
                   ? true
                   : execFilter === 'correct'
                     ? e.correct
-                    : !e.correct,
-              )
+                    : !e.correct
+              })
               const pageCount = Math.max(1, Math.ceil(filtered.length / EXEC_PAGE_SIZE))
               const page = Math.min(execPage, pageCount - 1)
               const start = page * EXEC_PAGE_SIZE
@@ -377,16 +405,20 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
                               {e.qty}
                             </td>
                             <td className="text-center py-2 pr-4 tabular-nums text-slate-400">
-                              {e.quartile != null ? `Q${e.quartile}` : '—'}
+                              {isBearsBot ? '—' : e.quartile != null ? `Q${e.quartile}` : '—'}
                             </td>
                             <td className="text-center py-2">
-                              <span
-                                className={`text-xs px-2 py-0.5 rounded font-medium ${
-                                  e.correct ? 'bg-buy/10 text-buy' : 'bg-sell/10 text-sell'
-                                }`}
-                              >
-                                {e.correct ? 'Correct' : 'Wrong'}
-                              </span>
+                              {isBearsBot ? (
+                                <span className="text-xs text-slate-500">—</span>
+                              ) : (
+                                <span
+                                  className={`text-xs px-2 py-0.5 rounded font-medium ${
+                                    e.correct ? 'bg-buy/10 text-buy' : 'bg-sell/10 text-sell'
+                                  }`}
+                                >
+                                  {e.correct ? 'Correct' : 'Wrong'}
+                                </span>
+                              )}
                             </td>
                           </tr>
                         ))}
@@ -447,7 +479,8 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
               </p>
             )}
           </div>
-        )}
+          )
+        })()}
       </div>
 
       {analytics && <SymbolBreakdown analytics={analytics} />}
@@ -459,6 +492,7 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
         symbol={chartModal.symbol}
         tradeId={chartModal.tradeId}
         exec={chartModal.exec}
+        mode={ceMode}
         onClose={() => setChartModal(null)}
       />
     )}
