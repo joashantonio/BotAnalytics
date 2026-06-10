@@ -350,7 +350,10 @@ def build_chart_data_ma10(
     if status == "completed" and buy_q > 0 and sell_q > 0:
         realized_pl = round(sell_pq - buy_pq, 2)
 
-    quartile_boxes: list[dict] = []
+    quartile_boxes = _build_quartile_boxes_ma10(
+        orders, df_wide, df, trend_w, ma_w,
+        highs, lows, dates, start_i, end_i, status,
+    )
     quartile_levels = _latest_ma10_quartile_levels(orders, df_wide, trend_w, ma_w, status)
 
     company_name = get_company_name(ticker)
@@ -378,6 +381,103 @@ def build_chart_data_ma10(
         "quartile_boxes": quartile_boxes,
         "quartile_levels": quartile_levels,
     }
+
+def _build_quartile_boxes_ma10(
+    orders, df_wide, df, trend_w, ma_w,
+    highs, lows, dates, start_i, end_i, status
+) -> list[dict]:
+    # MA10 analogue of _build_quartile_boxes. A buy's box spans the contiguous
+    # "submerged" run (closes below MA10 → trend == -1): left edge at the first
+    # submerged candle, right edge at the last candle before price resurfaces.
+    # The box top sits on the MA10 line at the first submerged candle; the
+    # bottom is the lowest low of the submerged candles. Sells mirror it across
+    # an above-MA10 run (trend == 1).
+    drawn_blocks: set[tuple] = set()
+    boxes = []
+
+    latest_block: dict[str, tuple] = {}
+    if status == "ongoing":
+        for order in orders:
+            if order["exec_price"] is None:
+                continue
+            side = order["side"]
+            expected_trend = -1 if side == "1" else 1
+            odt = _order_exec_date(order)
+            i_w = int(np.searchsorted(df_wide.index, odt, side="left"))
+            i_w = min(i_w, len(df_wide) - 1)
+            if trend_w[i_w] == expected_trend:
+                bs_w, be_w = ma10_mod.wide_trend_block(trend_w, i_w)
+                if side not in latest_block or bs_w > latest_block[side][0]:
+                    latest_block[side] = (bs_w, be_w)
+
+    for order in orders:
+        ep = order["exec_price"]
+        if ep is None:
+            continue
+        is_buy = order["side"] == "1"
+        expected_trend = -1 if is_buy else 1
+        odt = _order_exec_date(order)
+
+        i_w = int(np.searchsorted(df_wide.index, odt, side="left"))
+        i_w = min(i_w, len(df_wide) - 1)
+        if trend_w[i_w] != expected_trend:
+            continue
+
+        bs_w, be_w = ma10_mod.wide_trend_block(trend_w, i_w)
+        block_key = (bs_w, be_w)
+
+        if status == "ongoing" and block_key != latest_block.get(order["side"]):
+            continue
+        if block_key in drawn_blocks:
+            continue
+
+        bs_local = bs_w - start_i
+        be_local = be_w - start_i
+        bs_vis = max(bs_local, 0)
+        be_vis = min(be_local, len(df) - 1)
+        if bs_vis > be_vis:
+            drawn_blocks.add(block_key)
+            continue
+
+        block_highs = highs[bs_vis: be_vis + 1]
+        block_lows = lows[bs_vis: be_vis + 1]
+        # MA10 line value at the first candle of the block — the box's flat edge
+        # against the indicator (top for a buy/below run, bottom for a sell).
+        first_ma = float(ma_w[bs_w])
+
+        if is_buy:
+            price_lo = float(block_lows.min())
+            price_hi = first_ma
+        else:
+            price_lo = first_ma
+            price_hi = float(block_highs.max())
+
+        if price_hi <= price_lo:
+            drawn_blocks.add(block_key)
+            continue
+
+        left_date = dates[bs_vis].strftime("%Y-%m-%d")
+        right_date = dates[be_vis].strftime("%Y-%m-%d")
+
+        h = price_hi - price_lo
+        q_levels = [
+            round(price_lo + 0.25 * h, 4),
+            round(price_lo + 0.50 * h, 4),
+            round(price_lo + 0.75 * h, 4),
+        ]
+
+        boxes.append({
+            "side": "buy" if is_buy else "sell",
+            "color": PIN_BUY if is_buy else PIN_SELL,
+            "price_lo": round(price_lo, 4),
+            "price_hi": round(price_hi, 4),
+            "q_levels": q_levels,
+            "left_date": left_date,
+            "right_date": right_date,
+        })
+        drawn_blocks.add(block_key)
+
+    return boxes
 
 def _latest_ma10_quartile_levels(
     orders, df_wide, trend_w, ma_w, status

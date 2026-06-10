@@ -240,35 +240,6 @@ export default function TradeChart({ data, highlightExec }: Props) {
       candleSeries.attachPrimitive(new QuartileBoxPrimitive(data.quartile_boxes))
     }
 
-    if (data.quartile_levels) {
-      const ql = data.quartile_levels
-      const first = data.candles[0]?.time
-      const last = data.candles[data.candles.length - 1]?.time
-      if (first && last) {
-        const levels: Array<[number, string, string]> = [
-          [ql.fourth_quartile, '#64b5f6', `Fourth Quartile ${ql.fourth_quartile.toFixed(2)}`],
-          [ql.third_quartile, '#64b5f6', `Third Quartile ${ql.third_quartile.toFixed(2)}`],
-          [ql.second_quartile, '#64b5f6', `Second Quartile ${ql.second_quartile.toFixed(2)}`],
-          [ql.first_quartile, '#64b5f6', `First Quartile ${ql.first_quartile.toFixed(2)}`],
-        ]
-        for (const [value, color, title] of levels) {
-          const lineSeries = chart.addLineSeries({
-            color,
-            lineWidth: 1,
-            lineStyle: LineStyle.Dashed,
-            crosshairMarkerVisible: false,
-            lastValueVisible: true,
-            priceLineVisible: false,
-            title,
-          })
-          lineSeries.setData([
-            { time: first as Time, value },
-            { time: last as Time, value },
-          ])
-        }
-      }
-    }
-
     chart.timeScale().fitContent()
 
     const handleResize = () => {

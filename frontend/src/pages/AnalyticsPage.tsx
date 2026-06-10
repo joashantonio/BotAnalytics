@@ -5,10 +5,16 @@ import AnalyticsDashboard, { SymbolBreakdown } from '../components/AnalyticsDash
 import ChartModal from '../components/ChartModal'
 import { lsGet, lsSet } from '../lib/storage'
 
-// Correct-Executions date filter persists per session (survives reload + page
-// switches). Keyed by session id so each wallet keeps its own range.
-const ceDateKey = (sessionId: string | undefined, edge: 'from' | 'to') =>
-  `th:ce:${edge}:${sessionId ?? ''}`
+// Correct-Executions filters persist globally (survive reload + page switches +
+// wallet changes). Not keyed by session — the same range/bot-type applies to
+// every wallet so switching wallets keeps the filters put.
+const CE_FROM_KEY = 'th:ce:from'
+const CE_TO_KEY = 'th:ce:to'
+const CE_BOT_KEY = 'th:ce:botType'
+
+type CeMode = 'psar' | 'bearsbot' | 'ma10' | 'ma200'
+const isCeMode = (v: string | null): v is CeMode =>
+  v === 'psar' || v === 'bearsbot' || v === 'ma10' || v === 'ma200'
 
 interface Props {
   session: UploadResponse | null
@@ -25,16 +31,15 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
   }, [session, suffix, onEnter])
 
   // ── Correct Executions (indicator-trend correctness, optional date range) ─────
-  const [fromDate, setFromDate] = useState(
-    () => lsGet(ceDateKey(session?.session_id, 'from')) ?? '',
-  )
-  const [toDate, setToDate] = useState(
-    () => lsGet(ceDateKey(session?.session_id, 'to')) ?? '',
-  )
+  const [fromDate, setFromDate] = useState(() => lsGet(CE_FROM_KEY) ?? '')
+  const [toDate, setToDate] = useState(() => lsGet(CE_TO_KEY) ?? '')
   // Indicator the correctness check is scored against: PSAR trend, or MA10/MA200 cross.
   // 'bearsbot' has no backend scoring logic yet — it reuses the ma10 fetch for row
   // data and filters by bot_type only; its chart has no plot (see ChartModal).
-  const [ceMode, setCeMode] = useState<'psar' | 'bearsbot' | 'ma10' | 'ma200'>('psar')
+  const [ceMode, setCeMode] = useState<CeMode>(() => {
+    const saved = lsGet(CE_BOT_KEY)
+    return isCeMode(saved) ? saved : 'psar'
+  })
   // Backend correctness/chart mode — bearsbot has none, so borrow ma10's.
   const fetchMode = ceMode === 'bearsbot' ? 'ma10' : ceMode
   const [ce, setCe] = useState<CorrectExecutions | null>(null)
@@ -60,20 +65,25 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
     setChartModal({ symbol, tradeId, exec })
   }
 
-  // On session change, load that wallet's persisted range (prior CSV's dates
-  // won't apply, but each session keeps its own saved range across reloads).
+  // Clear stale results whenever the inputs that define them change (wallet,
+  // suffix, or bot/indicator mode). Without this, the previous wallet's stats
+  // keep rendering until the next fetch lands — e.g. switching to a wallet that
+  // has no Maard rows would still show the old wallet's Maard numbers. Filters
+  // (date range + bot type) are global and intentionally carry over.
   useEffect(() => {
-    setFromDate(lsGet(ceDateKey(session?.session_id, 'from')) ?? '')
-    setToDate(lsGet(ceDateKey(session?.session_id, 'to')) ?? '')
     setCe(null)
     setCeError(null)
-  }, [session?.session_id])
+  }, [session?.session_id, suffix, fetchMode])
 
-  // Persist the range whenever it changes, tagged with the active session.
+  // Persist the filters globally whenever they change.
   useEffect(() => {
-    lsSet(ceDateKey(session?.session_id, 'from'), fromDate || null)
-    lsSet(ceDateKey(session?.session_id, 'to'), toDate || null)
-  }, [fromDate, toDate, session?.session_id])
+    lsSet(CE_FROM_KEY, fromDate || null)
+    lsSet(CE_TO_KEY, toDate || null)
+  }, [fromDate, toDate])
+
+  useEffect(() => {
+    lsSet(CE_BOT_KEY, ceMode)
+  }, [ceMode])
 
   // auto-compute whenever the session, suffix, indicator mode, or date range changes
   useEffect(() => {
@@ -149,9 +159,10 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
           {' '}Optionally restrict to executions within a date range.
         </p>
 
+        <h3 className="text-xs font-medium text-slate-400 uppercase tracking-wide mb-2">Filters</h3>
         <div className="flex flex-wrap items-end gap-3 mb-4">
           <div className="flex flex-col gap-1 text-xs text-slate-400">
-            Indicator
+            Bot Type
             <div className="flex rounded border border-border overflow-hidden text-xs">
               <button
                 onClick={() => setCeMode('psar')}
@@ -185,26 +196,31 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
               </button>
             </div>
           </div>
-          <label className="flex flex-col gap-1 text-xs text-slate-400">
-            From
-            <input
-              type="date"
-              value={fromDate}
-              max={toDate || undefined}
-              onChange={(e) => setFromDate(e.target.value)}
-              className="bg-surface border border-border rounded px-2 py-1 text-sm text-white focus:outline-none focus:border-accent"
-            />
-          </label>
-          <label className="flex flex-col gap-1 text-xs text-slate-400">
-            To
-            <input
-              type="date"
-              value={toDate}
-              min={fromDate || undefined}
-              onChange={(e) => setToDate(e.target.value)}
-              className="bg-surface border border-border rounded px-2 py-1 text-sm text-white focus:outline-none focus:border-accent"
-            />
-          </label>
+          <div className="flex flex-col gap-1 text-xs text-slate-400">
+            Date Range
+            <div className="flex items-end gap-2">
+              <label className="flex flex-col gap-1 text-xs text-slate-500">
+                From
+                <input
+                  type="date"
+                  value={fromDate}
+                  max={toDate || undefined}
+                  onChange={(e) => setFromDate(e.target.value)}
+                  className="bg-surface border border-border rounded px-2 py-1 text-sm text-white focus:outline-none focus:border-accent"
+                />
+              </label>
+              <label className="flex flex-col gap-1 text-xs text-slate-500">
+                To
+                <input
+                  type="date"
+                  value={toDate}
+                  min={fromDate || undefined}
+                  onChange={(e) => setToDate(e.target.value)}
+                  className="bg-surface border border-border rounded px-2 py-1 text-sm text-white focus:outline-none focus:border-accent"
+                />
+              </label>
+            </div>
+          </div>
           {(fromDate || toDate) && (
             <button
               onClick={() => {
@@ -231,12 +247,48 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
           // Bears Bot has no correctness logic yet — force all correctness metrics to 0
           // and hide the quartile breakdown. The executions table still lists its rows.
           const isBearsBot = ceMode === 'bearsbot'
-          const correctPct = isBearsBot ? 0 : ce.correct_pct
-          const buyPct = isBearsBot ? 0 : ce.buy_pct
-          const sellPct = isBearsBot ? 0 : ce.sell_pct
-          const correctExecutions = isBearsBot ? 0 : ce.correct_executions
-          const buyCorrect = isBearsBot ? 0 : ce.buy_correct
-          const sellCorrect = isBearsBot ? 0 : ce.sell_correct
+
+          // The backend scores EVERY execution in the wallet against the chosen
+          // indicator and does not filter by bot type, so ce.* totals mix all
+          // bots. The cards/quartiles must reflect only the executions matching
+          // the active Bot Type filter — otherwise a wallet with no Maard rows
+          // would still show non-zero Maard stats borrowed from its other bots.
+          const botMatches = (raw: string) => {
+            const bt = (raw || '').toLowerCase()
+            if (ceMode === 'psar') return bt.includes('maard')
+            if (ceMode === 'bearsbot') return bt.includes('bears bot') && !bt.includes('booster')
+            if (ceMode === 'ma10') return bt.includes('booster')
+            return true
+          }
+          const botExecs = (ce.executions ?? []).filter((e) => botMatches(e.bot_type))
+
+          const total_executions = botExecs.length
+          const buy_total = botExecs.filter((e) => e.side === 'buy').length
+          const sell_total = botExecs.filter((e) => e.side === 'sell').length
+          const correctExecutions = isBearsBot ? 0 : botExecs.filter((e) => e.correct).length
+          const buyCorrect = isBearsBot ? 0 : botExecs.filter((e) => e.side === 'buy' && e.correct).length
+          const sellCorrect = isBearsBot ? 0 : botExecs.filter((e) => e.side === 'sell' && e.correct).length
+          const pct = (n: number, d: number) => (d > 0 ? (n / d) * 100 : 0)
+          const correctPct = pct(correctExecutions, total_executions)
+          const buyPct = pct(buyCorrect, buy_total)
+          const sellPct = pct(sellCorrect, sell_total)
+
+          // Quartile counts, recomputed over the bot-filtered correct rows.
+          const qCount = (rows: typeof botExecs, q: 1 | 2 | 3 | 4) =>
+            rows.filter((e) => e.correct && e.quartile === q).length
+          const quartiles = { 1: qCount(botExecs, 1), 2: qCount(botExecs, 2), 3: qCount(botExecs, 3), 4: qCount(botExecs, 4) }
+          const buyQuartiles = {
+            1: botExecs.filter((e) => e.correct && e.quartile === 1 && e.side === 'buy').length,
+            2: botExecs.filter((e) => e.correct && e.quartile === 2 && e.side === 'buy').length,
+            3: botExecs.filter((e) => e.correct && e.quartile === 3 && e.side === 'buy').length,
+            4: botExecs.filter((e) => e.correct && e.quartile === 4 && e.side === 'buy').length,
+          }
+          const sellQuartiles = {
+            1: botExecs.filter((e) => e.correct && e.quartile === 1 && e.side === 'sell').length,
+            2: botExecs.filter((e) => e.correct && e.quartile === 2 && e.side === 'sell').length,
+            3: botExecs.filter((e) => e.correct && e.quartile === 3 && e.side === 'sell').length,
+            4: botExecs.filter((e) => e.correct && e.quartile === 4 && e.side === 'sell').length,
+          }
           return (
           <div className="space-y-3">
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
@@ -248,7 +300,7 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
                   {correctPct.toFixed(1)}%
                 </span>
                 <span className="text-xs text-slate-500">
-                  {correctExecutions} / {ce.total_executions} executions
+                  {correctExecutions} / {total_executions} executions
                 </span>
               </div>
               <div className="bg-panel border border-border rounded-lg p-4 flex flex-col gap-1">
@@ -257,7 +309,7 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
                   {buyPct.toFixed(1)}%
                 </span>
                 <span className="text-xs text-slate-500">
-                  {buyCorrect} / {ce.buy_total} buys
+                  {buyCorrect} / {buy_total} buys
                 </span>
               </div>
               <div className="bg-panel border border-border rounded-lg p-4 flex flex-col gap-1">
@@ -266,11 +318,11 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
                   {sellPct.toFixed(1)}%
                 </span>
                 <span className="text-xs text-slate-500">
-                  {sellCorrect} / {ce.sell_total} sells
+                  {sellCorrect} / {sell_total} sells
                 </span>
               </div>
             </div>
-            {!isBearsBot && ce.correct_executions > 0 && ce.quartiles && (
+            {!isBearsBot && correctExecutions > 0 && (
               <div>
                 <h3 className="text-sm font-medium text-slate-400 mb-2 uppercase tracking-wide">
                   Quartile of Correct Executions
@@ -290,9 +342,9 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
                       </tr>
                     </thead>
                     <tbody>
-                      {(['1', '2', '3', '4'] as const).map((q) => {
-                        const all = ce.quartiles[q] ?? 0
-                        const pct = ce.correct_executions > 0 ? (all / ce.correct_executions) * 100 : 0
+                      {([1, 2, 3, 4] as const).map((q) => {
+                        const all = quartiles[q] ?? 0
+                        const pct = correctExecutions > 0 ? (all / correctExecutions) * 100 : 0
                         return (
                           <tr key={q} className="border-b border-border/50 hover:bg-panel/60">
                             <td className="py-2 pr-4 font-medium text-white">Q{q}</td>
@@ -300,10 +352,10 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
                               {all} <span className="text-slate-500">({pct.toFixed(1)}%)</span>
                             </td>
                             <td className="text-right py-2 pr-4 tabular-nums text-avgbuy">
-                              {ce.buy_quartiles?.[q] ?? 0}
+                              {buyQuartiles[q] ?? 0}
                             </td>
                             <td className="text-right py-2 tabular-nums text-avgsell">
-                              {ce.sell_quartiles?.[q] ?? 0}
+                              {sellQuartiles[q] ?? 0}
                             </td>
                           </tr>
                         )
@@ -313,25 +365,12 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
                 </div>
               </div>
             )}
-            {ce.executions && ce.executions.length > 0 && (() => {
-              // Bot-type the active indicator maps to. "Bears Bot" and "Bears Bot Booster"
-              // overlap, so Bears Bot must exclude any "booster". Case-insensitive substring —
-              // CSV "Bot" values vary ("Bears Bot Booster", "MAArD", etc).
-              const botMatches = (raw: string) => {
-                const bt = (raw || '').toLowerCase()
-                if (ceMode === 'psar') return bt.includes('maard')
-                if (ceMode === 'bearsbot') return bt.includes('bears bot') && !bt.includes('booster')
-                if (ceMode === 'ma10') return bt.includes('booster')
-                return true
-              }
-              const filtered = ce.executions.filter((e) => {
-                if (!botMatches(e.bot_type)) return false
-                return execFilter === 'all'
-                  ? true
-                  : execFilter === 'correct'
-                    ? e.correct
-                    : !e.correct
-              })
+            {botExecs.length > 0 && (() => {
+              // botExecs is already restricted to the active Bot Type filter
+              // (see the IIFE header). Apply only the correct/wrong toggle here.
+              const filtered = botExecs.filter((e) =>
+                execFilter === 'all' ? true : execFilter === 'correct' ? e.correct : !e.correct,
+              )
               const pageCount = Math.max(1, Math.ceil(filtered.length / EXEC_PAGE_SIZE))
               const page = Math.min(execPage, pageCount - 1)
               const start = page * EXEC_PAGE_SIZE
@@ -470,8 +509,10 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
                 </div>
               )
             })()}
-            {ce.total_executions === 0 && (
-              <p className="text-slate-500 text-sm">No executions in the selected range.</p>
+            {total_executions === 0 && (
+              <p className="text-slate-500 text-sm">
+                No {ceMode === 'psar' ? 'Maard Bot' : ceMode === 'bearsbot' ? 'Bears Bot' : ceMode === 'ma10' ? 'Bears Bot Booster' : 'MA200'} executions in the selected range.
+              </p>
             )}
             {ce.skipped_symbols.length > 0 && (
               <p className="text-xs text-orange-400">
