@@ -162,6 +162,7 @@ async def list_trades(
             "avg_sell": round(sell_pq / sell_q, 4) if sell_q > 0 else None,
             "realized_pl": round(sell_pq - buy_pq, 2) if info["status"] == "completed" and buy_q > 0 and sell_q > 0 else None,
             "order_count": len(info["orders"]),
+            "bot_type": info.get("bot_type", ""),
         })
 
     result.sort(key=lambda r: (r["symbol"], r["trade_id"]))

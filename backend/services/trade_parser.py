@@ -126,6 +126,9 @@ def parse_trades(content: bytes, source_name: str = "upload") -> dict[tuple, dic
     trades = {}
     for (tid, sym), v in raw.items():
         is_done = abs(v["buy_qty"] - v["sell_qty"]) < 1e-9
+        # Trade-level bot = first order's non-empty Bot value. Orders in one trade
+        # share a bot; the frontend uses this to auto-pick the indicator.
+        bot_type = next((o["bot_type"] for o in v["orders"] if o["bot_type"]), "")
         trades[(tid, sym)] = {
             "trade_id": tid,
             "symbol": sym,
@@ -135,6 +138,7 @@ def parse_trades(content: bytes, source_name: str = "upload") -> dict[tuple, dic
             "status": "completed" if is_done else "ongoing",
             "buy_qty": v["buy_qty"],
             "sell_qty": v["sell_qty"],
+            "bot_type": bot_type,
             "source": source_name,
             "quartile_levels": box_levels_by_trade.get(tid),
         }

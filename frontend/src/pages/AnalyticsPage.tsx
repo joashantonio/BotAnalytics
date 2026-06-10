@@ -33,15 +33,15 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
   // ── Correct Executions (indicator-trend correctness, optional date range) ─────
   const [fromDate, setFromDate] = useState(() => lsGet(CE_FROM_KEY) ?? '')
   const [toDate, setToDate] = useState(() => lsGet(CE_TO_KEY) ?? '')
-  // Indicator the correctness check is scored against: PSAR trend, or MA10/MA200 cross.
-  // 'bearsbot' has no backend scoring logic yet — it reuses the ma10 fetch for row
-  // data and filters by bot_type only; its chart has no plot (see ChartModal).
+  // Bot Type → indicator the correctness check is scored against:
+  // Maard Bot=PSAR, Bears Bot=MA200, Bears Bot Booster=MA10.
   const [ceMode, setCeMode] = useState<CeMode>(() => {
     const saved = lsGet(CE_BOT_KEY)
     return isCeMode(saved) ? saved : 'psar'
   })
-  // Backend correctness/chart mode — bearsbot has none, so borrow ma10's.
-  const fetchMode = ceMode === 'bearsbot' ? 'ma10' : ceMode
+  // Backend correctness/chart mode — 'bearsbot' has no mode of its own; it
+  // scores and plots against MA200.
+  const fetchMode = ceMode === 'bearsbot' ? 'ma200' : ceMode
   const [ce, setCe] = useState<CorrectExecutions | null>(null)
   const [ceLoading, setCeLoading] = useState(false)
   const [ceError, setCeError] = useState<string | null>(null)
@@ -147,8 +147,8 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
             <>A buy is “correct” when its execution date falls in a Maard Bot downtrend; a sell when
             it falls in an uptrend.</>
           ) : ceMode === 'bearsbot' ? (
-            <>Bears Bot executions. Correctness/plot logic not defined yet — rows shown for
-            inspection only.</>
+            <>A buy is “correct” when its execution closes below the MA200; a sell when it closes
+            above the MA200.</>
           ) : ceMode === 'ma10' ? (
             <>A buy is “correct” when its execution closes below the Bears Bot Booster line; a sell
             when it closes above it.</>
@@ -244,10 +244,6 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
         )}
 
         {ce && (() => {
-          // Bears Bot has no correctness logic yet — force all correctness metrics to 0
-          // and hide the quartile breakdown. The executions table still lists its rows.
-          const isBearsBot = ceMode === 'bearsbot'
-
           // The backend scores EVERY execution in the wallet against the chosen
           // indicator and does not filter by bot type, so ce.* totals mix all
           // bots. The cards/quartiles must reflect only the executions matching
@@ -265,9 +261,9 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
           const total_executions = botExecs.length
           const buy_total = botExecs.filter((e) => e.side === 'buy').length
           const sell_total = botExecs.filter((e) => e.side === 'sell').length
-          const correctExecutions = isBearsBot ? 0 : botExecs.filter((e) => e.correct).length
-          const buyCorrect = isBearsBot ? 0 : botExecs.filter((e) => e.side === 'buy' && e.correct).length
-          const sellCorrect = isBearsBot ? 0 : botExecs.filter((e) => e.side === 'sell' && e.correct).length
+          const correctExecutions = botExecs.filter((e) => e.correct).length
+          const buyCorrect = botExecs.filter((e) => e.side === 'buy' && e.correct).length
+          const sellCorrect = botExecs.filter((e) => e.side === 'sell' && e.correct).length
           const pct = (n: number, d: number) => (d > 0 ? (n / d) * 100 : 0)
           const correctPct = pct(correctExecutions, total_executions)
           const buyPct = pct(buyCorrect, buy_total)
@@ -322,13 +318,13 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
                 </span>
               </div>
             </div>
-            {!isBearsBot && correctExecutions > 0 && (
+            {correctExecutions > 0 && (
               <div>
                 <h3 className="text-sm font-medium text-slate-400 mb-2 uppercase tracking-wide">
                   Quartile of Correct Executions
                 </h3>
                 <p className="text-xs text-slate-500 mb-2">
-                  Where each correct execution landed inside its {ceMode === 'psar' ? 'Maard Bot' : ceMode === 'ma10' ? 'Bears Bot Booster' : 'MA200'} trend
+                  Where each correct execution landed inside its {ceMode === 'psar' ? 'Maard Bot' : ceMode === 'ma10' ? 'Bears Bot Booster' : ceMode === 'bearsbot' ? 'Bears Bot' : 'MA200'} trend
                   block (Q1 = lowest price band, Q4 = highest).
                 </p>
                 <div className="overflow-x-auto">
@@ -444,20 +440,16 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
                               {e.qty}
                             </td>
                             <td className="text-center py-2 pr-4 tabular-nums text-slate-400">
-                              {isBearsBot ? '—' : e.quartile != null ? `Q${e.quartile}` : '—'}
+                              {e.quartile != null ? `Q${e.quartile}` : '—'}
                             </td>
                             <td className="text-center py-2">
-                              {isBearsBot ? (
-                                <span className="text-xs text-slate-500">—</span>
-                              ) : (
-                                <span
-                                  className={`text-xs px-2 py-0.5 rounded font-medium ${
-                                    e.correct ? 'bg-buy/10 text-buy' : 'bg-sell/10 text-sell'
-                                  }`}
-                                >
-                                  {e.correct ? 'Correct' : 'Wrong'}
-                                </span>
-                              )}
+                              <span
+                                className={`text-xs px-2 py-0.5 rounded font-medium ${
+                                  e.correct ? 'bg-buy/10 text-buy' : 'bg-sell/10 text-sell'
+                                }`}
+                              >
+                                {e.correct ? 'Correct' : 'Wrong'}
+                              </span>
                             </td>
                           </tr>
                         ))}
