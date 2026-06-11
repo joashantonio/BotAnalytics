@@ -171,15 +171,14 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
           {' '}Optionally restrict to executions within a date range.
         </p>
 
-        <div className="bg-surface/60 border border-border rounded-lg p-4 mb-5">
-        <h3 className="text-xs font-medium text-slate-400 uppercase tracking-wide mb-3">Filters</h3>
-        <div className="flex flex-wrap items-end gap-3">
-          <div className="flex flex-col gap-1 text-xs text-slate-400">
-            Bot Type
-            <div className="flex rounded border border-border overflow-hidden text-xs">
+        <div className="bg-surface/60 border border-border rounded-lg px-3 py-2.5 mb-5 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs">
+          <span className="font-medium text-slate-400 uppercase tracking-wide">Filters</span>
+          <div className="flex items-center gap-2">
+            <span className="text-slate-500">Bot</span>
+            <div className="flex rounded border border-border overflow-hidden">
               <button
                 onClick={() => setCeMode('psar')}
-                className={`px-3 py-1.5 transition-colors ${
+                className={`px-2.5 py-1 transition-colors ${
                   ceMode === 'psar'
                     ? 'bg-accent/20 text-accent font-medium'
                     : 'bg-surface text-slate-400 hover:text-white'
@@ -189,7 +188,7 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
               </button>
               <button
                 onClick={() => setCeMode('bearsbot')}
-                className={`px-3 py-1.5 transition-colors border-l border-border ${
+                className={`px-2.5 py-1 transition-colors border-l border-border ${
                   ceMode === 'bearsbot'
                     ? 'bg-accent/20 text-accent font-medium'
                     : 'bg-surface text-slate-400 hover:text-white'
@@ -199,7 +198,7 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
               </button>
               <button
                 onClick={() => setCeMode('ma10')}
-                className={`px-3 py-1.5 transition-colors border-l border-border ${
+                className={`px-2.5 py-1 transition-colors border-l border-border ${
                   ceMode === 'ma10'
                     ? 'bg-accent/20 text-accent font-medium'
                     : 'bg-surface text-slate-400 hover:text-white'
@@ -209,30 +208,23 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
               </button>
             </div>
           </div>
-          <div className="flex flex-col gap-1 text-xs text-slate-400">
-            Date Range
-            <div className="flex items-end gap-2">
-              <label className="flex flex-col gap-1 text-xs text-slate-500">
-                From
-                <input
-                  type="date"
-                  value={fromDate}
-                  max={toDate || undefined}
-                  onChange={(e) => setFromDate(e.target.value)}
-                  className="bg-surface border border-border rounded px-2 py-1 text-sm text-white focus:outline-none focus:border-accent"
-                />
-              </label>
-              <label className="flex flex-col gap-1 text-xs text-slate-500">
-                To
-                <input
-                  type="date"
-                  value={toDate}
-                  min={fromDate || undefined}
-                  onChange={(e) => setToDate(e.target.value)}
-                  className="bg-surface border border-border rounded px-2 py-1 text-sm text-white focus:outline-none focus:border-accent"
-                />
-              </label>
-            </div>
+          <div className="flex items-center gap-2">
+            <span className="text-slate-500">Date</span>
+            <input
+              type="date"
+              value={fromDate}
+              max={toDate || undefined}
+              onChange={(e) => setFromDate(e.target.value)}
+              className="bg-surface border border-border rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-accent"
+            />
+            <span className="text-slate-600">→</span>
+            <input
+              type="date"
+              value={toDate}
+              min={fromDate || undefined}
+              onChange={(e) => setToDate(e.target.value)}
+              className="bg-surface border border-border rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-accent"
+            />
           </div>
           {(fromDate || toDate) && (
             <button
@@ -240,15 +232,14 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
                 setFromDate('')
                 setToDate('')
               }}
-              className="text-xs text-accent hover:underline pb-2"
+              className="text-accent hover:underline"
             >
               clear
             </button>
           )}
           {ceLoading && (
-            <span className="ml-auto text-sm text-slate-400 animate-pulse pb-2">Computing…</span>
+            <span className="ml-auto text-slate-400 animate-pulse">Computing…</span>
           )}
-        </div>
         </div>
 
         {ceError && (
