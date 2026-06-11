@@ -6,6 +6,20 @@ import yfinance as yf
 
 _OHLCV_COLS = ["Open", "High", "Low", "Close", "Volume"]
 
+# Market-break windows (inclusive). Candles on these dates are excluded from
+# all fetched data so indicators and plots never see them.
+MARKET_BREAKS = [
+    ("2026-03-17", "2026-03-23"),
+    ("2026-05-24", "2026-05-28"),
+]
+
+def _drop_market_breaks(df: pd.DataFrame) -> pd.DataFrame:
+    for start, end in MARKET_BREAKS:
+        mask = (df.index >= pd.Timestamp(start)) & (df.index <= pd.Timestamp(end))
+        if mask.any():
+            df = df[~mask]
+    return df
+
 def _df_to_json(df: pd.DataFrame) -> str:
     cols = [c for c in _OHLCV_COLS if c in df.columns]
     payload = {
@@ -44,11 +58,11 @@ def fetch_ohlcv(ticker: str, from_date: str, to_date: str) -> pd.DataFrame:
     from ..cache import get_ohlcv, set_ohlcv
     cached = get_ohlcv(ticker, from_date, to_date)
     if cached is not None:
-        return _json_to_df(cached)
+        return _drop_market_breaks(_json_to_df(cached))
 
     df = _download_ohlcv(ticker, from_date, to_date)
     set_ohlcv(ticker, from_date, to_date, _df_to_json(df))
-    return df
+    return _drop_market_breaks(df)
 
 def get_company_name(ticker: str) -> str:
     from ..cache import get_company_name_cached, set_company_name_cached
