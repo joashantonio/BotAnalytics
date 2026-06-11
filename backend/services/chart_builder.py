@@ -22,6 +22,25 @@ def _order_exec_date(order: dict) -> pd.Timestamp:
         return pd.Timestamp(d.date())
     return pd.Timestamp(d)
 
+def _last_exec_index_in_block(
+    orders, df_wide: "pd.DataFrame", bs_w: int, be_w: int, start_i: int
+) -> int | None:
+    """Local (df-relative) index of the latest execution date that falls
+    within the wide-index block [bs_w, be_w], or None if no order does."""
+    last_w = None
+    for order in orders:
+        if order["exec_price"] is None:
+            continue
+        odt = _order_exec_date(order)
+        i_w = int(np.searchsorted(df_wide.index, odt, side="left"))
+        i_w = min(i_w, len(df_wide) - 1)
+        if bs_w <= i_w <= be_w:
+            if last_w is None or i_w > last_w:
+                last_w = i_w
+    if last_w is None:
+        return None
+    return last_w - start_i
+
 def _order_span_window(
     df_wide: "pd.DataFrame", orders: list[dict], entry_date: str, exit_date: str,
     pad_bars: int = 40,
@@ -415,7 +434,7 @@ def build_chart_data_ma10(
 
     quartile_boxes = _build_quartile_boxes_ma10(
         orders, df_wide, df, trend_w, ma_w,
-        highs, lows, dates, start_i, end_i, status,
+        lows, closes, dates, start_i, end_i, status,
     )
     quartile_levels = _latest_ma10_quartile_levels(orders, df_wide, trend_w, ma_w, status)
 
@@ -448,7 +467,7 @@ def build_chart_data_ma10(
 
 def _build_quartile_boxes_ma10(
     orders, df_wide, df, trend_w, ma_w,
-    highs, lows, dates, start_i, end_i, status
+    lows, closes, dates, start_i, end_i, status
 ) -> list[dict]:
     # MA10 analogue of _build_quartile_boxes. A buy's box spans the contiguous
     # "submerged" run (closes below MA10 → trend == -1): left edge at the first
@@ -459,7 +478,10 @@ def _build_quartile_boxes_ma10(
     drawn_blocks: set[tuple] = set()
     boxes = []
 
-    latest_block: dict[str, tuple] = {}
+    # For ongoing trades, anchor the box on the block containing the
+    # earliest qualifying order, so it starts at the beginning of the
+    # current trend rather than a later same-direction blip.
+    target_block: dict[str, tuple] = {}
     if status == "ongoing":
         for order in orders:
             if order["exec_price"] is None:
@@ -471,8 +493,8 @@ def _build_quartile_boxes_ma10(
             i_w = min(i_w, len(df_wide) - 1)
             if trend_w[i_w] == expected_trend:
                 bs_w, be_w = ma10_mod.wide_trend_block(trend_w, i_w)
-                if side not in latest_block or bs_w > latest_block[side][0]:
-                    latest_block[side] = (bs_w, be_w)
+                if side not in target_block or bs_w < target_block[side][0]:
+                    target_block[side] = (bs_w, be_w)
 
     for order in orders:
         ep = order["exec_price"]
@@ -490,7 +512,7 @@ def _build_quartile_boxes_ma10(
         bs_w, be_w = ma10_mod.wide_trend_block(trend_w, i_w)
         block_key = (bs_w, be_w)
 
-        if status == "ongoing" and block_key != latest_block.get(order["side"]):
+        if status == "ongoing" and block_key != target_block.get(order["side"]):
             continue
         if block_key in drawn_blocks:
             continue
@@ -503,31 +525,27 @@ def _build_quartile_boxes_ma10(
             drawn_blocks.add(block_key)
             continue
 
-        block_highs = highs[bs_vis: be_vis + 1]
+        # Don't draw the box past the last execution that falls inside this block.
+        last_exec_local = _last_exec_index_in_block(orders, df_wide, bs_w, be_w, start_i)
+        if last_exec_local is not None:
+            be_vis = min(be_vis, max(bs_vis, last_exec_local))
+
         block_lows = lows[bs_vis: be_vis + 1]
+        block_closes = closes[bs_vis: be_vis + 1]
         # MA10 line value at the first candle of the block — the box's flat edge
         # against the indicator (top for a buy/below run, bottom for a sell).
         first_ma = float(ma_w[bs_w])
-        # MA10 is undefined (NaN) for the first 9 bars. If a block starts there,
-        # anchor the flat edge to the first visible candle with a defined MA10
-        # instead of dropping the box / poisoning it with NaN.
         if np.isnan(first_ma):
-            edge_w = next(
-                (j for j in range(bs_vis + start_i, be_vis + start_i + 1)
-                 if not np.isnan(ma_w[j])),
-                None,
-            )
-            if edge_w is None:
-                drawn_blocks.add(block_key)
-                continue
-            first_ma = float(ma_w[edge_w])
+            drawn_blocks.add(block_key)
+            continue
 
         if is_buy:
             price_lo = float(block_lows.min())
             price_hi = first_ma
         else:
             price_lo = first_ma
-            price_hi = float(block_highs.max())
+            # Q1 edge: close of the candle with the lowest low in the block.
+            price_hi = float(block_closes[int(np.argmin(block_lows))])
 
         if price_hi <= price_lo:
             drawn_blocks.add(block_key)
@@ -605,6 +623,8 @@ def _latest_ma10_quartile_levels(
     is_downtrend = trend_w[bs_w] == -1
 
     start_price = float(ma_w[bs_w])
+    if np.isnan(start_price):
+        return None
     block_lows = wide_lows[bs_w: span_end + 1]
     block_highs = wide_highs[bs_w: span_end + 1]
 

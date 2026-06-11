@@ -139,7 +139,7 @@ async def get_chart_endpoint(
     # Always version the key (incl. PSAR). Previously PSAR with no range cached
     # under a bare suffix with no version, so payload-shape changes (e.g. adding
     # bot_type) were never cache-busted and stale-shaped rows kept being served.
-    cache_suffix = f"{suffix}::{mode}::v20{range_part}"
+    cache_suffix = f"{suffix}::{mode}::v21{range_part}"
 
     cached = get_chart(session_id, trade_id, symbol, cache_suffix)
     if cached is not None:
