@@ -774,14 +774,24 @@ def _build_quartile_boxes_ma200(
         if last_exec_local is not None:
             be_vis = min(be_vis, max(bs_vis, last_exec_local))
 
-        block_lows = lows[bs_vis: be_vis + 1]
-        block_closes = closes[bs_vis: be_vis + 1]
         # MA200 line value at the first candle of the block — the box's flat edge
         # against the indicator (top for a buy/below run, bottom for a sell).
-        first_ma = float(ma_w[bs_w])
-        if np.isnan(first_ma):
+        # If the block's start is cut off by the fetch window (MA200 needs 200
+        # prior bars), fall back to the first bar in the block with a valid MA200.
+        anchor_w = bs_w
+        while anchor_w <= be_w and np.isnan(ma_w[anchor_w]):
+            anchor_w += 1
+        if anchor_w > be_w:
             drawn_blocks.add(block_key)
             continue
+        first_ma = float(ma_w[anchor_w])
+
+        anchor_vis = max(anchor_w - start_i, 0)
+        if anchor_vis > be_vis:
+            drawn_blocks.add(block_key)
+            continue
+        block_lows = lows[anchor_vis: be_vis + 1]
+        block_closes = closes[anchor_vis: be_vis + 1]
 
         if is_buy:
             price_lo = float(block_lows.min())
@@ -795,7 +805,7 @@ def _build_quartile_boxes_ma200(
             drawn_blocks.add(block_key)
             continue
 
-        left_date = dates[bs_vis].strftime("%Y-%m-%d")
+        left_date = dates[anchor_vis].strftime("%Y-%m-%d")
         right_date = dates[be_vis].strftime("%Y-%m-%d")
 
         h = price_hi - price_lo

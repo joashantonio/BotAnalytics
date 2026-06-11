@@ -136,7 +136,7 @@ async def get_chart_endpoint(
         raise HTTPException(status_code=422, detail="from_date must be on or before to_date")
 
     range_part = f"::{from_date or ''}:{to_date or ''}" if (from_date or to_date) else ""
-    cache_suffix = suffix if (mode == "psar" and not range_part) else f"{suffix}::{mode}::v10{range_part}"
+    cache_suffix = suffix if (mode == "psar" and not range_part) else f"{suffix}::{mode}::v11{range_part}"
 
     cached = get_chart(session_id, trade_id, symbol, cache_suffix)
     if cached is not None:
