@@ -2,7 +2,11 @@ import numpy as np
 import pandas as pd
 
 MA_PERIOD = 200
-LOOKBACK_DAYS = 365
+# The chart window widens to the full submerged/above trend block, which can
+# start ~a year before entry. MA200 needs 200 trailing bars (~290 calendar days)
+# BEFORE the window start to be defined, else the line is cut on the left. Pull
+# ~2 years so the rolling mean covers the whole widened window.
+LOOKBACK_DAYS = 730
 
 def compute_ma200(close: np.ndarray, period: int = MA_PERIOD) -> np.ndarray:
     s = pd.Series(close)

@@ -20,6 +20,7 @@ export interface TradeRow {
   avg_sell: number | null
   realized_pl: number | null
   order_count: number
+  bot_type: string
 }
 
 export interface SymbolSummary {
@@ -86,6 +87,7 @@ export interface ChartData {
   buy_qty: number
   sell_qty: number
   net_qty: number
+  bot_type: string
   quartile_boxes: QuartileBox[]
   quartile_levels?: {
     upper: number

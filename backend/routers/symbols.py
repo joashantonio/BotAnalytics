@@ -80,12 +80,12 @@ async def get_correct_executions(
     if from_date and to_date and from_date > to_date:
         raise HTTPException(status_code=422, detail="from_date must be on or before to_date")
 
-    # Version suffix (v6 = adds per-execution `bot_type`). Bump when the
-    # payload shape or semantics change so stale-shaped cached rows are
-    # naturally missed, not served. mode_part keys the cache per indicator
+    # Version suffix (v7 = ma200 extended lookback + keep NaN-MA execs as rows).
+    # Bump when the payload shape or semantics change so stale-shaped cached rows
+    # are naturally missed, not served. mode_part keys the cache per indicator
     # (psar/ma10/ma200) so switching mode doesn't serve another mode's rows.
     mode_part = "" if mode == "psar" else f"::{mode}"
-    scope = f"__correct_exec__v6__{mode_part}:{from_date or ''}:{to_date or ''}"
+    scope = f"__correct_exec__v7__{mode_part}:{from_date or ''}:{to_date or ''}"
     cached = get_analytics(session_id, scope, suffix)
     if cached is not None:
         return cached
@@ -136,7 +136,10 @@ async def get_chart_endpoint(
         raise HTTPException(status_code=422, detail="from_date must be on or before to_date")
 
     range_part = f"::{from_date or ''}:{to_date or ''}" if (from_date or to_date) else ""
-    cache_suffix = suffix if (mode == "psar" and not range_part) else f"{suffix}::{mode}::v11{range_part}"
+    # Always version the key (incl. PSAR). Previously PSAR with no range cached
+    # under a bare suffix with no version, so payload-shape changes (e.g. adding
+    # bot_type) were never cache-busted and stale-shaped rows kept being served.
+    cache_suffix = f"{suffix}::{mode}::v21{range_part}"
 
     cached = get_chart(session_id, trade_id, symbol, cache_suffix)
     if cached is not None:

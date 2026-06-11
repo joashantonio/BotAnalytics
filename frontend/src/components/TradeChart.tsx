@@ -68,6 +68,11 @@ export default function TradeChart({ data, highlightExec }: Props) {
         borderColor: COLORS.border,
         timeVisible: true,
         secondsVisible: false,
+        // Bears Bot (MA200) boxes can run right up to the latest candle (ongoing
+        // trades reach today, so there are no future bars to pad with). Reserve
+        // blank bars on the right so the box's right edge isn't flush against the
+        // chart edge. fitContent() honours this offset.
+        rightOffset: data.ma200 && data.ma200.length > 0 ? 15 : 0,
       },
       handleScroll: true,
       handleScale: true,

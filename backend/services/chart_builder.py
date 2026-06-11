@@ -41,6 +41,35 @@ def _last_exec_index_in_block(
         return None
     return last_w - start_i
 
+def _order_span_window(
+    df_wide: "pd.DataFrame", orders: list[dict], entry_date: str, exit_date: str,
+    pad_bars: int = 40,
+) -> tuple[int, int]:
+    # Tight window framed on the executed orders (first -> last) plus padding,
+    # rather than the full indicator trend cycle. Falls back to entry/exit dates
+    # when no orders carry an execution price.
+    dates = df_wide.index
+    last = len(df_wide) - 1
+
+    order_dates = [
+        _order_exec_date(o) for o in orders if o.get("exec_price") is not None
+    ]
+    if order_dates:
+        lo_dt, hi_dt = min(order_dates), max(order_dates)
+    else:
+        lo_dt, hi_dt = pd.Timestamp(entry_date), pd.Timestamp(exit_date)
+
+    lo_i = int(np.searchsorted(dates, lo_dt, side="left"))
+    hi_i = int(np.searchsorted(dates, hi_dt, side="right")) - 1
+    lo_i = max(0, min(lo_i, last))
+    hi_i = max(0, min(hi_i, last))
+    if hi_i < lo_i:
+        hi_i = lo_i
+
+    start_i = max(0, lo_i - pad_bars)
+    end_i = min(last, hi_i + pad_bars)
+    return start_i, end_i
+
 def _widen_window_for_range(
     df_wide: "pd.DataFrame", start_i: int, end_i: int, from_date: str | None, to_date: str | None
 ) -> tuple[int, int]:
@@ -58,6 +87,39 @@ def _widen_window_for_range(
         end_i = max(end_i, max(0, min(ti, last)))
 
     return start_i, end_i
+
+def _widen_window_for_blocks(
+    df_wide: "pd.DataFrame", trend_w: np.ndarray, orders: list[dict],
+    start_i: int, end_i: int, ma_mod, pad_bars: int = 15,
+) -> tuple[int, int]:
+    # Extend the window to cover the full trend block of every order whose
+    # execution lands on its expected side (buy on a below-MA run, sell on an
+    # above-MA run). The quartile box spans bs_w..be_w of that block with its flat
+    # edge on the MA line at bs_w; if the block starts before start_i the box's
+    # top/left edge is clipped off-screen. Widening here keeps the whole rectangle
+    # visible. Blocks an order doesn't sit on (wrong side) draw no box, so skip.
+    dates = df_wide.index
+    last = len(df_wide) - 1
+    widened = False
+    for order in orders:
+        if order.get("exec_price") is None:
+            continue
+        expected_trend = -1 if order["side"] == "1" else 1
+        odt = _order_exec_date(order)
+        i_w = int(np.searchsorted(dates, odt, side="left"))
+        i_w = min(i_w, last)
+        if trend_w[i_w] != expected_trend:
+            continue
+        bs_w, be_w = ma_mod.wide_trend_block(trend_w, i_w)
+        start_i = min(start_i, bs_w)
+        end_i = max(end_i, be_w)
+        widened = True
+    # Pad both sides so the box doesn't sit flush against the chart edge — a few
+    # candles of breathing room before/after the rectangle.
+    if widened:
+        start_i -= pad_bars
+        end_i += pad_bars
+    return max(0, start_i), min(last, end_i)
 
 def build_chart_data(
     trade_info: dict,
@@ -181,6 +243,7 @@ def build_chart_data(
         "buy_qty": buy_q,
         "sell_qty": sell_q,
         "net_qty": round(buy_q - sell_q, 4),
+        "bot_type": trade_info.get("bot_type", ""),
         "quartile_boxes": quartile_boxes,
     }
 
@@ -234,11 +297,6 @@ def _build_quartile_boxes(
         if bs_vis > be_vis:
             drawn_blocks.add(block_key)
             continue
-
-        # Don't draw the box past the last execution that falls inside this block.
-        last_exec_local = _last_exec_index_in_block(orders, df_wide, bs_w, be_w, start_i)
-        if last_exec_local is not None:
-            be_vis = min(be_vis, max(bs_vis, last_exec_local))
 
         block_highs = highs[bs_vis: be_vis + 1]
         block_lows = lows[bs_vis: be_vis + 1]
@@ -402,6 +460,7 @@ def build_chart_data_ma10(
         "buy_qty": buy_q,
         "sell_qty": sell_q,
         "net_qty": round(buy_q - sell_q, 4),
+        "bot_type": trade_info.get("bot_type", ""),
         "quartile_boxes": quartile_boxes,
         "quartile_levels": quartile_levels,
     }
@@ -581,6 +640,55 @@ def _latest_ma10_quartile_levels(
 
     return ma10_mod.box_levels(price_lo, price_hi)
 
+# Hard ceiling for the MA200 history search (~10 years). If a stock has been
+# on one side of its MA200 for this long, give up on finding the crossover and
+# fall back to the inset-left-edge rendering.
+_MA200_MAX_LOOKBACK_DAYS = 3650
+
+def _fetch_ma200_resolved(
+    ticker: str, entry_date: str, exit_date: str, orders: list[dict]
+) -> tuple["pd.DataFrame", np.ndarray, np.ndarray]:
+    # A quartile box's left edge must sit on the candle that actually crossed
+    # the MA200 — the first submerged (buy) / surfaced (sell) bar of the
+    # order's trend block. compute_trend back-fills the pre-MA200 NaN region
+    # with the running trend, so when a block walks back into that region its
+    # "start" is bar 0 of the fetch, not a real crossover. Double the lookback
+    # until every order's block starts on a bar with a defined MA200 (a real
+    # crossover) or the cap is hit.
+    lookback = ma200_mod.LOOKBACK_DAYS
+    while True:
+        df_wide = fetch_wide(ticker, entry_date, exit_date, lookback_days=lookback)
+        closes_w = df_wide["Close"].values.astype(float)
+        ma_w = ma200_mod.compute_ma200(closes_w)
+        trend_w = ma200_mod.compute_trend(closes_w, ma_w)
+
+        if lookback >= _MA200_MAX_LOOKBACK_DAYS:
+            return df_wide, ma_w, trend_w
+
+        if np.all(np.isnan(ma_w)):
+            first_ma_i = len(ma_w)  # MA200 never defined: every block unresolved
+        else:
+            first_ma_i = int(np.argmax(~np.isnan(ma_w)))
+
+        dates = df_wide.index
+        last = len(df_wide) - 1
+        unresolved = False
+        for order in orders:
+            if order.get("exec_price") is None:
+                continue
+            expected_trend = -1 if order["side"] == "1" else 1
+            i_w = min(int(np.searchsorted(dates, _order_exec_date(order), side="left")), last)
+            if trend_w[i_w] != expected_trend:
+                continue
+            bs_w, _ = ma200_mod.wide_trend_block(trend_w, i_w)
+            if bs_w <= first_ma_i:
+                unresolved = True
+                break
+
+        if not unresolved:
+            return df_wide, ma_w, trend_w
+        lookback = min(lookback * 2, _MA200_MAX_LOOKBACK_DAYS)
+
 def build_chart_data_ma200(
     trade_info: dict,
     suffix: str = ".SR",
@@ -595,13 +703,34 @@ def build_chart_data_ma200(
     exit_date = trade_info.get("exit_date") or pd.Timestamp.today().strftime("%Y-%m-%d")
     status = trade_info["status"]
 
-    df_wide = _df_wide_override if _df_wide_override is not None else fetch_wide(ticker, entry_date, exit_date, lookback_days=ma200_mod.LOOKBACK_DAYS)
-    closes_w = df_wide["Close"].values.astype(float)
-    ma_w = ma200_mod.compute_ma200(closes_w)
-    trend_w = ma200_mod.compute_trend(closes_w, ma_w)
+    # MA200 needs >=200 trailing bars, and the quartile box needs the real
+    # MA200 crossover candle in-frame — fetch widens until both hold.
+    if _df_wide_override is not None:
+        df_wide = _df_wide_override
+        closes_w = df_wide["Close"].values.astype(float)
+        ma_w = ma200_mod.compute_ma200(closes_w)
+        trend_w = ma200_mod.compute_trend(closes_w, ma_w)
+    else:
+        df_wide, ma_w, trend_w = _fetch_ma200_resolved(ticker, entry_date, exit_date, orders)
 
-    start_i, end_i = ma200_mod.compute_chart_window(df_wide, trend_w, entry_date, exit_date, orders)
+    # MA200 trend cycles span months, so the cycle-based window balloons to a
+    # year of candles. Frame tightly on the order span (+pad) instead.
+    start_i, end_i = _order_span_window(df_wide, orders, entry_date, exit_date)
+    # A quartile box spans the full submerged/above trend block of its order
+    # (bs_w..be_w), with its flat edge anchored to the MA line at the block start.
+    # The block almost always begins well before the order-span window, so widen
+    # the window to cover every drawable block — otherwise the box's top and left
+    # edge fall off-screen and the rectangle can't be drawn.
+    start_i, end_i = _widen_window_for_blocks(df_wide, trend_w, orders, start_i, end_i, ma200_mod)
     start_i, end_i = _widen_window_for_range(df_wide, start_i, end_i, from_date, to_date)
+    # Never show candles before MA200 is defined (first 199 bars are NaN). If the
+    # widened window reaches into that region the red MA200 line is cut on the left
+    # — candles render but the indicator can't. Clamp the left edge to the first
+    # bar with a defined MA200 so the line spans every visible candle.
+    first_ma_i = int(np.argmax(~np.isnan(ma_w))) if not np.all(np.isnan(ma_w)) else 0
+    start_i = max(start_i, first_ma_i)
+    if end_i < start_i:
+        end_i = start_i
     df = df_wide.iloc[start_i: end_i + 1].copy()
 
     if df.empty:
@@ -679,7 +808,7 @@ def build_chart_data_ma200(
 
     quartile_boxes = _build_quartile_boxes_ma200(
         orders, df_wide, df, trend_w, ma_w,
-        lows, closes, dates, start_i, end_i, status,
+        highs, lows, dates, start_i, end_i, status,
     )
     quartile_levels = _latest_ma200_quartile_levels(orders, df_wide, trend_w, ma_w, status)
 
@@ -705,27 +834,26 @@ def build_chart_data_ma200(
         "buy_qty": buy_q,
         "sell_qty": sell_q,
         "net_qty": round(buy_q - sell_q, 4),
+        "bot_type": trade_info.get("bot_type", ""),
         "quartile_boxes": quartile_boxes,
         "quartile_levels": quartile_levels,
     }
 
 def _build_quartile_boxes_ma200(
     orders, df_wide, df, trend_w, ma_w,
-    lows, closes, dates, start_i, end_i, status
+    highs, lows, dates, start_i, end_i, status,
+    left_pad_bars: int = 40,
 ) -> list[dict]:
-    # MA200 analogue of _build_quartile_boxes_ma10. A buy's box spans the
-    # contiguous "submerged" run (closes below MA200 → trend == -1): left
-    # edge at the first submerged candle, right edge at the last candle
-    # before price resurfaces. The box top sits on the MA200 line at the
-    # first submerged candle; the bottom is the lowest low of the submerged
-    # candles. Sells mirror it across an above-MA200 run (trend == 1).
+    # MA200 analogue of _build_quartile_boxes. A buy's box spans the contiguous
+    # "submerged" run (closes below MA200 → trend == -1): left edge at the first
+    # submerged candle, right edge at the last candle before price resurfaces.
+    # The box top sits on the MA200 line at the first submerged candle; the
+    # bottom is the lowest low of the submerged candles. Sells mirror it across
+    # an above-MA200 run (trend == 1).
     drawn_blocks: set[tuple] = set()
     boxes = []
 
-    # For ongoing trades, anchor the box on the block containing the
-    # earliest qualifying order, so it starts at the beginning of the
-    # current trend rather than a later same-direction blip.
-    target_block: dict[str, tuple] = {}
+    latest_block: dict[str, tuple] = {}
     if status == "ongoing":
         for order in orders:
             if order["exec_price"] is None:
@@ -737,8 +865,8 @@ def _build_quartile_boxes_ma200(
             i_w = min(i_w, len(df_wide) - 1)
             if trend_w[i_w] == expected_trend:
                 bs_w, be_w = ma200_mod.wide_trend_block(trend_w, i_w)
-                if side not in target_block or bs_w < target_block[side][0]:
-                    target_block[side] = (bs_w, be_w)
+                if side not in latest_block or bs_w > latest_block[side][0]:
+                    latest_block[side] = (bs_w, be_w)
 
     for order in orders:
         ep = order["exec_price"]
@@ -756,7 +884,7 @@ def _build_quartile_boxes_ma200(
         bs_w, be_w = ma200_mod.wide_trend_block(trend_w, i_w)
         block_key = (bs_w, be_w)
 
-        if status == "ongoing" and block_key != target_block.get(order["side"]):
+        if status == "ongoing" and block_key != latest_block.get(order["side"]):
             continue
         if block_key in drawn_blocks:
             continue
@@ -765,47 +893,51 @@ def _build_quartile_boxes_ma200(
         be_local = be_w - start_i
         bs_vis = max(bs_local, 0)
         be_vis = min(be_local, len(df) - 1)
+        # When the block is clipped at the window's first candle (e.g. price
+        # submerged below MA200 since before the visible window, so the
+        # first-MA200 clamp ate the left padding), the box would sit flush
+        # against the chart's left edge with the first candle starting exactly
+        # on it. Inset the box's visible left edge by a few bars so candles
+        # render before the rectangle.
+        if bs_vis == 0:
+            bs_vis = min(left_pad_bars, be_vis)
         if bs_vis > be_vis:
             drawn_blocks.add(block_key)
             continue
 
-        # Don't draw the box past the last execution that falls inside this block.
-        last_exec_local = _last_exec_index_in_block(orders, df_wide, bs_w, be_w, start_i)
-        if last_exec_local is not None:
-            be_vis = min(be_vis, max(bs_vis, last_exec_local))
-
+        block_highs = highs[bs_vis: be_vis + 1]
+        block_lows = lows[bs_vis: be_vis + 1]
         # MA200 line value at the first candle of the block — the box's flat edge
         # against the indicator (top for a buy/below run, bottom for a sell).
-        # If the block's start is cut off by the fetch window (MA200 needs 200
-        # prior bars), fall back to the first bar in the block with a valid MA200.
-        anchor_w = bs_w
-        while anchor_w <= be_w and np.isnan(ma_w[anchor_w]):
-            anchor_w += 1
-        if anchor_w > be_w:
-            drawn_blocks.add(block_key)
-            continue
-        first_ma = float(ma_w[anchor_w])
-
-        anchor_vis = max(anchor_w - start_i, 0)
-        if anchor_vis > be_vis:
-            drawn_blocks.add(block_key)
-            continue
-        block_lows = lows[anchor_vis: be_vis + 1]
-        block_closes = closes[anchor_vis: be_vis + 1]
+        first_ma = float(ma_w[bs_w])
+        # MA200 is undefined (NaN) until 200 trailing bars exist. When the trend
+        # block starts before that (e.g. an entire year submerged below MA200,
+        # bs_w == 0), ma_w[bs_w] is NaN. Don't drop the box — anchor the flat edge
+        # to the first candle in the *visible* window whose MA200 is defined, which
+        # is the MA200 value the user actually sees at the box's left edge.
+        if np.isnan(first_ma):
+            edge_w = next(
+                (j for j in range(bs_vis + start_i, be_vis + start_i + 1)
+                 if not np.isnan(ma_w[j])),
+                None,
+            )
+            if edge_w is None:
+                drawn_blocks.add(block_key)
+                continue
+            first_ma = float(ma_w[edge_w])
 
         if is_buy:
             price_lo = float(block_lows.min())
             price_hi = first_ma
         else:
             price_lo = first_ma
-            # Q1 edge: close of the candle with the lowest low in the block.
-            price_hi = float(block_closes[int(np.argmin(block_lows))])
+            price_hi = float(block_highs.max())
 
         if price_hi <= price_lo:
             drawn_blocks.add(block_key)
             continue
 
-        left_date = dates[anchor_vis].strftime("%Y-%m-%d")
+        left_date = dates[bs_vis].strftime("%Y-%m-%d")
         right_date = dates[be_vis].strftime("%Y-%m-%d")
 
         h = price_hi - price_lo
@@ -877,8 +1009,17 @@ def _latest_ma200_quartile_levels(
     is_downtrend = trend_w[bs_w] == -1
 
     start_price = float(ma_w[bs_w])
+    # MA200 undefined (NaN) before 200 trailing bars. If the block starts there
+    # (e.g. a full year submerged, bs_w == 0), anchor the flat edge to the first
+    # candle in the block with a defined MA200 instead of dropping the levels.
     if np.isnan(start_price):
-        return None
+        edge_w = next(
+            (j for j in range(bs_w, span_end + 1) if not np.isnan(ma_w[j])),
+            None,
+        )
+        if edge_w is None:
+            return None
+        start_price = float(ma_w[edge_w])
     block_lows = wide_lows[bs_w: span_end + 1]
     block_highs = wide_highs[bs_w: span_end + 1]
 
@@ -1295,6 +1436,9 @@ def _compute_correct_executions_ma200(
         earliest = min(g["entries"])
         latest = max(g["exits"])
         try:
+            # MA200 needs >=200 trailing bars. The default ~120-day lookback
+            # (~80 bars) leaves the rolling mean all-NaN, so every execution
+            # would be dropped and the wallet's Bears Bot rows would vanish.
             df_wide = fetch_wide(ticker, earliest, latest, lookback_days=ma200_mod.LOOKBACK_DAYS)
         except Exception:
             skipped.append(sym)
@@ -1315,10 +1459,12 @@ def _compute_correct_executions_ma200(
             is_buy = o["side"] == "1"
             close = closes[i_w]
             ma = ma_w[i_w]
-            if np.isnan(ma):
-                continue
+            # MA200 is undefined (NaN) before 200 trailing bars exist. Don't drop
+            # the execution — keep it in the table (marked not-correct, no
+            # quartile) so the wallet's rows still list. Only scoring is skipped.
+            ma_known = not np.isnan(ma)
             # cast to Python bool: numpy.bool_ isn't JSON-serializable.
-            ok = bool((is_buy and close < ma) or (not is_buy and close > ma))
+            ok = bool(ma_known and ((is_buy and close < ma) or (not is_buy and close > ma)))
             total += 1
             if is_buy:
                 buy_total += 1

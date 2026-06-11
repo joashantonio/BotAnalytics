@@ -9,10 +9,19 @@ interface Props {
   symbol: string
   tradeId: string
   exec: SelectedExec
-  // Indicator to plot — mirrors the Analytics indicator filter (Maard Bot=psar,
-  // Bears Bot Booster=ma10). 'bearsbot' has no plotting logic yet → shows a notice.
+  // Indicator to plot — mirrors the Analytics Bot Type filter. Maard Bot=psar,
+  // Bears Bot=ma200, Bears Bot Booster=ma10.
   mode?: 'psar' | 'bearsbot' | 'ma10' | 'ma200'
   onClose: () => void
+}
+
+// Map the Analytics Bot Type to the backend chart indicator. 'bearsbot' has no
+// backend mode of its own — it plots on the MA200 chart.
+const PLOT_MODE: Record<'psar' | 'bearsbot' | 'ma10' | 'ma200', 'psar' | 'ma10' | 'ma200'> = {
+  psar: 'psar',
+  bearsbot: 'ma200',
+  ma10: 'ma10',
+  ma200: 'ma200',
 }
 
 /**
@@ -29,14 +38,11 @@ export default function ChartModal({
   mode = 'psar',
   onClose,
 }: Props) {
-  // Bears Bot has no plotting logic yet — don't fetch, show a notice instead.
-  const noPlot = mode === 'bearsbot'
-  const { data, loading, error, load } = useChart(sessionId, suffix, mode === 'bearsbot' ? 'ma10' : mode)
+  const { data, loading, error, load } = useChart(sessionId, suffix, PLOT_MODE[mode])
 
   useEffect(() => {
-    if (noPlot) return
     load(symbol, tradeId)
-  }, [symbol, tradeId, load, noPlot])
+  }, [symbol, tradeId, load])
 
   // Close on Escape.
   useEffect(() => {
@@ -104,18 +110,7 @@ export default function ChartModal({
 
         {/* chart */}
         <div className="flex-1 relative overflow-hidden">
-          {noPlot && (
-            <div className="absolute inset-0 flex items-center justify-center">
-              <div className="text-center text-slate-400 space-y-2">
-                <div className="text-3xl">📊</div>
-                <p className="text-sm">No plot for Bears Bot yet.</p>
-                <p className="text-xs text-slate-500">
-                  Plotting logic for this indicator is not defined.
-                </p>
-              </div>
-            </div>
-          )}
-          {!noPlot && loading && (
+          {loading && (
             <div className="absolute inset-0 flex items-center justify-center bg-surface/80 z-10">
               <div className="text-slate-400 animate-pulse text-sm">Loading chart data…</div>
             </div>

@@ -66,8 +66,13 @@ export default function ChartPage({
   const symbols = [...new Set(trades.map((t) => t.symbol))].sort()
   const filteredTrades = trades.filter((t) => !filterSymbol || t.symbol === filterSymbol)
 
-  const handleSelect = (symbol: string, tradeId: string) => {
-
+  const handleSelect = (symbol: string, tradeId: string, botType: string) => {
+    // Auto-pick the indicator that matches the trade's bot. Check "booster"
+    // before "bears bot" since the former contains the latter as a substring.
+    const bot = botType.toLowerCase()
+    if (bot.includes('booster')) setIndicatorMode('ma10')
+    else if (bot.includes('bears bot')) setIndicatorMode('ma200')
+    else setIndicatorMode('psar') // Maard + unknown/empty
     onSelectTrade(symbol, tradeId)
   }
 
@@ -171,7 +176,7 @@ export default function ChartPage({
             return (
               <button
                 key={`${t.trade_id}_${t.symbol}`}
-                onClick={() => handleSelect(t.symbol, t.trade_id)}
+                onClick={() => handleSelect(t.symbol, t.trade_id, t.bot_type)}
                 className={`w-full text-left px-3 py-2.5 border-b border-border/40 transition-colors ${
                   active ? 'bg-accent/10 border-l-2 border-l-accent' : 'hover:bg-surface'
                 }`}
@@ -208,39 +213,61 @@ export default function ChartPage({
 
       <div className="flex-1 flex flex-col overflow-hidden">
         {data && (
-          <div className="px-4 py-2 border-b border-border bg-panel shrink-0 flex items-center gap-4 flex-wrap">
-            <span className="font-bold text-white">{data.company_name}</span>
-            <span className="font-mono text-xs text-slate-400">{data.ticker} · D</span>
-            <span
-              className={`text-xs px-2 py-0.5 rounded font-medium ${
-                data.status === 'completed'
-                  ? 'bg-buy/10 text-buy'
-                  : 'bg-orange-500/10 text-orange-400'
-              }`}
-            >
-              {data.status === 'completed' ? 'Completed' : 'Ongoing'}
-            </span>
-            <span className="text-xs text-slate-400">{data.cycle_direction}</span>
-            {data.realized_pl != null && (
+          <div className="px-4 py-2 border-b border-border bg-panel shrink-0 flex items-center gap-4">
+            {/* Company name pinned leftmost. */}
+            <span className="font-bold text-white truncate min-w-0">{data.company_name}</span>
+
+            {/* Everything else pinned rightmost via ml-auto on the container (not a
+                conditional item). Each metric is a fixed slot showing "—" when
+                absent, so positions line up identically across trades. */}
+            <div className="flex items-center gap-4 ml-auto shrink-0">
+              <span className="font-mono text-xs text-slate-400">{data.ticker} · D</span>
               <span
-                className={`text-xs font-semibold ml-auto ${
-                  data.realized_pl >= 0 ? 'text-buy' : 'text-sell'
+                className={`text-xs px-2 py-0.5 rounded font-medium ${
+                  data.status === 'completed'
+                    ? 'bg-buy/10 text-buy'
+                    : 'bg-orange-500/10 text-orange-400'
                 }`}
               >
-                P&L {data.realized_pl.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                {data.status === 'completed' ? 'Completed' : 'Ongoing'}
               </span>
-            )}
-            {data.avg_buy != null && (
-              <span className="text-xs text-avgbuy">Avg Buy {data.avg_buy.toFixed(4)}</span>
-            )}
-            {data.avg_sell != null && (
-              <span className="text-xs text-avgsell">Avg Sell {data.avg_sell.toFixed(4)}</span>
-            )}
-            {data.net_qty !== 0 && (
+              <span className="text-xs text-slate-400">{data.cycle_direction}</span>
+              <span
+                className={`text-xs px-2 py-0.5 rounded font-medium ${
+                  data.bot_type
+                    ? 'bg-accent/15 text-accent'
+                    : 'bg-slate-500/15 text-slate-400'
+                }`}
+              >
+                {data.bot_type || 'Unknown'}
+              </span>
+              <span
+                className={`text-xs font-semibold ${
+                  data.realized_pl == null
+                    ? 'text-slate-500'
+                    : data.realized_pl >= 0
+                      ? 'text-buy'
+                      : 'text-sell'
+                }`}
+              >
+                P&L{' '}
+                {data.realized_pl == null
+                  ? '—'
+                  : data.realized_pl.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+              </span>
+              <span className="text-xs text-avgbuy">
+                Avg Buy {data.avg_buy == null ? '—' : data.avg_buy.toFixed(4)}
+              </span>
+              <span className="text-xs text-avgsell">
+                Avg Sell {data.avg_sell == null ? '—' : data.avg_sell.toFixed(4)}
+              </span>
               <span className="text-xs text-slate-300">
-                Net {data.net_qty > 0 ? 'Long' : 'Short'} {Math.abs(data.net_qty).toFixed(0)}
+                Net{' '}
+                {data.net_qty === 0
+                  ? '—'
+                  : `${data.net_qty > 0 ? 'Long' : 'Short'} ${Math.abs(data.net_qty).toFixed(0)}`}
               </span>
-            )}
+            </div>
           </div>
         )}
 
