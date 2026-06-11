@@ -6,14 +6,26 @@ import yfinance as yf
 
 _OHLCV_COLS = ["Open", "High", "Low", "Close", "Volume"]
 
-# Market-break windows (inclusive). Candles on these dates are excluded from
-# all fetched data so indicators and plots never see them.
+# Known Saudi Exchange (Tadawul, ".SR") market-break windows (inclusive).
+# yfinance forward-fills these as stale rows with Volume == 0 rather than
+# omitting them, so we strip them explicitly. Kept as a backstop in addition
+# to the generic zero-volume filter below — sourced from Tadawul holiday
+# calendar (Eid Al-Fitr, Eid Al-Adha, Founding Day, National Day).
+#   2026-03-19..03-22  Eid Al-Fitr
+#   2026-05-24..05-28  Eid Al-Adha (Arafat + Eid)
 MARKET_BREAKS = [
-    ("2026-03-17", "2026-03-23"),
+    ("2026-03-19", "2026-03-22"),
     ("2026-05-24", "2026-05-28"),
 ]
 
 def _drop_market_breaks(df: pd.DataFrame) -> pd.DataFrame:
+    # Generic filter: any candle with zero volume is a non-trading day that
+    # yfinance forward-filled (flat OHLC). These corrupt PSAR/MA indicators,
+    # so drop every interior zero-volume row regardless of date.
+    if "Volume" in df.columns:
+        df = df[df["Volume"] > 0]
+    # Explicit backstop for known break windows, in case a real partial-volume
+    # row slips through on a closure date.
     for start, end in MARKET_BREAKS:
         mask = (df.index >= pd.Timestamp(start)) & (df.index <= pd.Timestamp(end))
         if mask.any():

@@ -46,6 +46,9 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
   const [ceLoading, setCeLoading] = useState(false)
   const [ceError, setCeError] = useState<string | null>(null)
   const [execFilter, setExecFilter] = useState<'all' | 'correct' | 'wrong'>('all')
+  const [sideFilter, setSideFilter] = useState<'all' | 'buy' | 'sell'>('all')
+  const [sortKey, setSortKey] = useState<'date' | 'quartile' | 'side'>('date')
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
   const [execPage, setExecPage] = useState(0)
   const EXEC_PAGE_SIZE = 10
 
@@ -59,7 +62,7 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
   // back to first page whenever the filter or the underlying data changes
   useEffect(() => {
     setExecPage(0)
-  }, [execFilter, ce])
+  }, [execFilter, sideFilter, sortKey, sortDir, ce])
 
   const openChart = (symbol: string, tradeId: string, exec: SelectedExec) => {
     setChartModal({ symbol, tradeId, exec })
@@ -126,9 +129,15 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
 
   return (
     <div className="h-full overflow-y-auto">
-    <div className="max-w-4xl mx-auto px-4 py-8 space-y-8">
+    <div className="max-w-4xl mx-auto px-4 py-8 space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-white mb-6">Portfolio Analytics</h1>
+        <h1 className="text-2xl font-bold text-white">Portfolio Analytics</h1>
+        <p className="text-sm text-slate-400 mt-1">
+          Performance overview and indicator-scored execution accuracy.
+        </p>
+      </div>
+
+      <section className="bg-panel border border-border rounded-xl p-5 shadow-sm">
         {loading && (
           <div className="text-slate-400 animate-pulse text-sm">Computing analytics…</div>
         )}
@@ -138,11 +147,14 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
           </div>
         )}
         {analytics && <AnalyticsDashboard analytics={analytics} showSymbolBreakdown={false} />}
-      </div>
+      </section>
 
-      <div>
-        <h2 className="text-lg font-semibold text-white mb-1">Executions</h2>
-        <p className="text-xs text-slate-400 mb-4">
+      <section className="bg-panel border border-border rounded-xl p-5 shadow-sm">
+        <div className="flex items-center gap-2 mb-1">
+          <span className="h-5 w-1 rounded-full bg-accent" />
+          <h2 className="text-lg font-semibold text-white">Executions</h2>
+        </div>
+        <p className="text-xs text-slate-400 mb-5 pl-3">
           {ceMode === 'psar' ? (
             <>A buy is “correct” when its execution date falls in a Maard Bot downtrend; a sell when
             it falls in an uptrend.</>
@@ -159,8 +171,9 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
           {' '}Optionally restrict to executions within a date range.
         </p>
 
-        <h3 className="text-xs font-medium text-slate-400 uppercase tracking-wide mb-2">Filters</h3>
-        <div className="flex flex-wrap items-end gap-3 mb-4">
+        <div className="bg-surface/60 border border-border rounded-lg p-4 mb-5">
+        <h3 className="text-xs font-medium text-slate-400 uppercase tracking-wide mb-3">Filters</h3>
+        <div className="flex flex-wrap items-end gap-3">
           <div className="flex flex-col gap-1 text-xs text-slate-400">
             Bot Type
             <div className="flex rounded border border-border overflow-hidden text-xs">
@@ -236,6 +249,7 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
             <span className="ml-auto text-sm text-slate-400 animate-pulse pb-2">Computing…</span>
           )}
         </div>
+        </div>
 
         {ceError && (
           <div className="bg-red-900/30 border border-red-700 rounded-lg px-4 py-3 text-red-300 text-sm">
@@ -269,6 +283,13 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
           const buyPct = pct(buyCorrect, buy_total)
           const sellPct = pct(sellCorrect, sell_total)
 
+          const wrongExecutions = total_executions - correctExecutions
+          const buyWrong = buy_total - buyCorrect
+          const sellWrong = sell_total - sellCorrect
+          const wrongPct = pct(wrongExecutions, total_executions)
+          const buyWrongPct = pct(buyWrong, buy_total)
+          const sellWrongPct = pct(sellWrong, sell_total)
+
           // Quartile counts, recomputed over the bot-filtered correct rows.
           const qCount = (rows: typeof botExecs, q: 1 | 2 | 3 | 4) =>
             rows.filter((e) => e.correct && e.quartile === q).length
@@ -286,41 +307,84 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
             4: botExecs.filter((e) => e.correct && e.quartile === 4 && e.side === 'sell').length,
           }
           return (
-          <div className="space-y-3">
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-              <div className="bg-panel border border-border rounded-lg p-4 flex flex-col gap-1">
-                <span className="text-xs text-slate-400 uppercase tracking-wide">Correct %</span>
-                <span
-                  className={`text-2xl font-semibold tabular-nums ${correctPct >= 50 ? 'text-buy' : 'text-sell'}`}
-                >
-                  {correctPct.toFixed(1)}%
-                </span>
-                <span className="text-xs text-slate-500">
-                  {correctExecutions} / {total_executions} executions
-                </span>
+          <div className="space-y-5">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              {/* Correct group */}
+              <div className="rounded-lg border border-buy/30 bg-buy/5 p-4">
+                <div className="flex items-center gap-2 mb-3">
+                  <span className="text-buy text-sm">✓</span>
+                  <h3 className="text-xs font-semibold text-buy uppercase tracking-wide">Correct</h3>
+                </div>
+                <div className="grid grid-cols-3 gap-3">
+                  <div className="flex flex-col gap-0.5">
+                    <span className="text-[10px] text-slate-400 uppercase tracking-wide">Overall</span>
+                    <span className="text-2xl font-semibold tabular-nums text-buy">
+                      {correctPct.toFixed(1)}%
+                    </span>
+                    <span className="text-[11px] text-slate-500">
+                      {correctExecutions} / {total_executions}
+                    </span>
+                  </div>
+                  <div className="flex flex-col gap-0.5">
+                    <span className="text-[10px] text-slate-400 uppercase tracking-wide">Buys</span>
+                    <span className="text-2xl font-semibold tabular-nums text-avgbuy">
+                      {buyPct.toFixed(1)}%
+                    </span>
+                    <span className="text-[11px] text-slate-500">
+                      {buyCorrect} / {buy_total}
+                    </span>
+                  </div>
+                  <div className="flex flex-col gap-0.5">
+                    <span className="text-[10px] text-slate-400 uppercase tracking-wide">Sells</span>
+                    <span className="text-2xl font-semibold tabular-nums text-avgsell">
+                      {sellPct.toFixed(1)}%
+                    </span>
+                    <span className="text-[11px] text-slate-500">
+                      {sellCorrect} / {sell_total}
+                    </span>
+                  </div>
+                </div>
               </div>
-              <div className="bg-panel border border-border rounded-lg p-4 flex flex-col gap-1">
-                <span className="text-xs text-slate-400 uppercase tracking-wide">Buys correct</span>
-                <span className="text-2xl font-semibold tabular-nums text-avgbuy">
-                  {buyPct.toFixed(1)}%
-                </span>
-                <span className="text-xs text-slate-500">
-                  {buyCorrect} / {buy_total} buys
-                </span>
-              </div>
-              <div className="bg-panel border border-border rounded-lg p-4 flex flex-col gap-1">
-                <span className="text-xs text-slate-400 uppercase tracking-wide">Sells correct</span>
-                <span className="text-2xl font-semibold tabular-nums text-avgsell">
-                  {sellPct.toFixed(1)}%
-                </span>
-                <span className="text-xs text-slate-500">
-                  {sellCorrect} / {sell_total} sells
-                </span>
+              {/* Incorrect group */}
+              <div className="rounded-lg border border-sell/30 bg-sell/5 p-4">
+                <div className="flex items-center gap-2 mb-3">
+                  <span className="text-sell text-sm">✕</span>
+                  <h3 className="text-xs font-semibold text-sell uppercase tracking-wide">Incorrect</h3>
+                </div>
+                <div className="grid grid-cols-3 gap-3">
+                  <div className="flex flex-col gap-0.5">
+                    <span className="text-[10px] text-slate-400 uppercase tracking-wide">Overall</span>
+                    <span className="text-2xl font-semibold tabular-nums text-sell">
+                      {wrongPct.toFixed(1)}%
+                    </span>
+                    <span className="text-[11px] text-slate-500">
+                      {wrongExecutions} / {total_executions}
+                    </span>
+                  </div>
+                  <div className="flex flex-col gap-0.5">
+                    <span className="text-[10px] text-slate-400 uppercase tracking-wide">Buys</span>
+                    <span className="text-2xl font-semibold tabular-nums text-avgbuy">
+                      {buyWrongPct.toFixed(1)}%
+                    </span>
+                    <span className="text-[11px] text-slate-500">
+                      {buyWrong} / {buy_total}
+                    </span>
+                  </div>
+                  <div className="flex flex-col gap-0.5">
+                    <span className="text-[10px] text-slate-400 uppercase tracking-wide">Sells</span>
+                    <span className="text-2xl font-semibold tabular-nums text-avgsell">
+                      {sellWrongPct.toFixed(1)}%
+                    </span>
+                    <span className="text-[11px] text-slate-500">
+                      {sellWrong} / {sell_total}
+                    </span>
+                  </div>
+                </div>
               </div>
             </div>
             {correctExecutions > 0 && (
-              <div>
-                <h3 className="text-sm font-medium text-slate-400 mb-2 uppercase tracking-wide">
+              <div className="border-t border-border pt-5">
+                <h3 className="text-sm font-medium text-white mb-2">
                   Quartile of Correct Executions
                 </h3>
                 <p className="text-xs text-slate-500 mb-2">
@@ -364,50 +428,107 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
             {botExecs.length > 0 && (() => {
               // botExecs is already restricted to the active Bot Type filter
               // (see the IIFE header). Apply only the correct/wrong toggle here.
-              const filtered = botExecs.filter((e) =>
-                execFilter === 'all' ? true : execFilter === 'correct' ? e.correct : !e.correct,
-              )
+              const filtered = botExecs
+                .filter((e) =>
+                  execFilter === 'all' ? true : execFilter === 'correct' ? e.correct : !e.correct,
+                )
+                .filter((e) => (sideFilter === 'all' ? true : e.side === sideFilter))
+                .slice()
+                .sort((a, b) => {
+                  const dir = sortDir === 'asc' ? 1 : -1
+                  let cmp = 0
+                  if (sortKey === 'date') {
+                    cmp = a.exec_date.localeCompare(b.exec_date)
+                  } else if (sortKey === 'quartile') {
+                    cmp = (a.quartile ?? 0) - (b.quartile ?? 0)
+                  } else {
+                    cmp = a.side.localeCompare(b.side)
+                  }
+                  return cmp * dir
+                })
+              const toggleSort = (key: 'date' | 'quartile' | 'side') => {
+                if (sortKey === key) {
+                  setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
+                } else {
+                  setSortKey(key)
+                  setSortDir('asc')
+                }
+              }
+              const SortArrow = ({ k }: { k: 'date' | 'quartile' | 'side' }) =>
+                sortKey === k ? (
+                  <span className="text-accent text-base font-bold ml-1">{sortDir === 'asc' ? '▲' : '▼'}</span>
+                ) : (
+                  <span className="text-slate-500 text-base font-bold ml-1">⇅</span>
+                )
+              const thSort = (k: 'date' | 'quartile' | 'side') =>
+                sortKey === k ? 'text-accent' : 'hover:text-white'
               const pageCount = Math.max(1, Math.ceil(filtered.length / EXEC_PAGE_SIZE))
               const page = Math.min(execPage, pageCount - 1)
               const start = page * EXEC_PAGE_SIZE
               const pageRows = filtered.slice(start, start + EXEC_PAGE_SIZE)
               return (
-                <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <h3 className="text-sm font-medium text-slate-400 uppercase tracking-wide">
+                <div className="border-t border-border pt-5">
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className="text-sm font-medium text-white">
                       Inspect Execution on Chart
                     </h3>
-                    <div className="flex gap-1 text-xs">
-                      {(['all', 'correct', 'wrong'] as const).map((f) => (
-                        <button
-                          key={f}
-                          onClick={() => setExecFilter(f)}
-                          className={`px-2 py-1 rounded capitalize transition-colors ${
-                            execFilter === f
-                              ? 'bg-accent/20 text-accent font-medium'
-                              : 'text-slate-400 hover:text-white'
-                          }`}
-                        >
-                          {f}
-                        </button>
-                      ))}
+                    <div className="flex items-center gap-2 text-xs">
+                      <select
+                        value={sideFilter}
+                        onChange={(e) => setSideFilter(e.target.value as 'all' | 'buy' | 'sell')}
+                        className="px-2 py-1 rounded bg-panel border border-border text-slate-300 capitalize"
+                      >
+                        <option value="all">All Sides</option>
+                        <option value="buy">Buy</option>
+                        <option value="sell">Sell</option>
+                      </select>
+                      <div className="flex gap-1">
+                        {(['all', 'correct', 'wrong'] as const).map((f) => (
+                          <button
+                            key={f}
+                            onClick={() => setExecFilter(f)}
+                            className={`px-2 py-1 rounded capitalize transition-colors ${
+                              execFilter === f
+                                ? 'bg-accent/20 text-accent font-medium'
+                                : 'text-slate-400 hover:text-white'
+                            }`}
+                          >
+                            {f}
+                          </button>
+                        ))}
+                      </div>
                     </div>
                   </div>
                   <p className="text-xs text-slate-500 mb-2">
-                    Click an execution to view its trade chart.
+                    Click a column header to sort; click a row to view its trade chart.
                   </p>
-                  <div className="overflow-x-auto">
+                  <div className="overflow-x-auto rounded-lg border border-border">
                     <table className="w-full text-sm">
                       <thead>
-                        <tr className="text-slate-400 border-b border-border">
-                          <th className="text-left py-2 pr-4">Date</th>
+                        <tr className="text-slate-400 bg-surface/60 border-b border-border">
+                          <th
+                            onClick={() => toggleSort('date')}
+                            className={`text-left py-2 px-4 cursor-pointer select-none whitespace-nowrap transition-colors ${thSort('date')}`}
+                          >
+                            Date<SortArrow k="date" />
+                          </th>
                           <th className="text-left py-2 pr-4">Symbol</th>
                           <th className="text-left py-2 pr-4">Bot Type</th>
                           <th className="text-left py-2 pr-4">Trade</th>
-                          <th className="text-left py-2 pr-4">Side</th>
+                          <th
+                            onClick={() => toggleSort('side')}
+                            className={`text-left py-2 pr-4 cursor-pointer select-none whitespace-nowrap transition-colors ${thSort('side')}`}
+                          >
+                            Side<SortArrow k="side" />
+                          </th>
                           <th className="text-right py-2 pr-4">Price</th>
                           <th className="text-right py-2 pr-4">Qty</th>
-                          <th className="text-center py-2 pr-4">Quartile</th>
+                          <th
+                            onClick={() => toggleSort('quartile')}
+                            className={`text-center py-2 pr-4 cursor-pointer select-none whitespace-nowrap transition-colors ${thSort('quartile')}`}
+                          >
+                            Quartile<SortArrow k="quartile" />
+                          </th>
                           <th className="text-center py-2">Result</th>
                         </tr>
                       </thead>
@@ -422,9 +543,9 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
                                 price: e.exec_price,
                               })
                             }
-                            className="border-b border-border/50 hover:bg-panel/60 cursor-pointer"
+                            className="border-b border-border/50 odd:bg-surface/20 hover:bg-accent/10 cursor-pointer transition-colors"
                           >
-                            <td className="py-2 pr-4 text-slate-300 whitespace-nowrap">{e.exec_date}</td>
+                            <td className="py-2 px-4 text-slate-300 whitespace-nowrap">{e.exec_date}</td>
                             <td className="py-2 pr-4 font-mono font-medium text-white">{e.symbol}</td>
                             <td className="py-2 pr-4 text-slate-300">{e.bot_type || '—'}</td>
                             <td className="py-2 pr-4 text-slate-400">{e.trade_id}</td>
@@ -514,9 +635,13 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
           </div>
           )
         })()}
-      </div>
+      </section>
 
-      {analytics && <SymbolBreakdown analytics={analytics} />}
+      {analytics && (
+        <section className="bg-panel border border-border rounded-xl p-5 shadow-sm">
+          <SymbolBreakdown analytics={analytics} />
+        </section>
+      )}
     </div>
     {chartModal && session && (
       <ChartModal
