@@ -12,6 +12,8 @@ const CE_FROM_KEY = 'th:ce:from'
 const CE_TO_KEY = 'th:ce:to'
 const CE_BOT_KEY = 'th:ce:botType'
 
+type SortKey = 'date' | 'symbol' | 'botType' | 'trade' | 'side' | 'price' | 'qty' | 'quartile' | 'result'
+
 type CeMode = 'psar' | 'bearsbot' | 'ma10' | 'ma200'
 const isCeMode = (v: string | null): v is CeMode =>
   v === 'psar' || v === 'bearsbot' || v === 'ma10' || v === 'ma200'
@@ -47,7 +49,7 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
   const [ceError, setCeError] = useState<string | null>(null)
   const [execFilter, setExecFilter] = useState<'all' | 'correct' | 'wrong'>('all')
   const [sideFilter, setSideFilter] = useState<'all' | 'buy' | 'sell'>('all')
-  const [sortKey, setSortKey] = useState<'date' | 'quartile' | 'side'>('date')
+  const [sortKey, setSortKey] = useState<SortKey>('date')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
   const [execPage, setExecPage] = useState(0)
   const EXEC_PAGE_SIZE = 10
@@ -151,10 +153,9 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
 
       <section className="bg-panel border border-border rounded-xl p-5 shadow-sm">
         <div className="flex items-center gap-2 mb-1">
-          <span className="h-5 w-1 rounded-full bg-accent" />
           <h2 className="text-lg font-semibold text-white">Executions</h2>
         </div>
-        <p className="text-xs text-slate-400 mb-5 pl-3">
+        <p className="text-xs text-slate-400 mb-5">
           {ceMode === 'psar' ? (
             <>A buy is “correct” when its execution date falls in a Maard Bot downtrend; a sell when
             it falls in an uptrend.</>
@@ -428,16 +429,38 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
                 .sort((a, b) => {
                   const dir = sortDir === 'asc' ? 1 : -1
                   let cmp = 0
-                  if (sortKey === 'date') {
-                    cmp = a.exec_date.localeCompare(b.exec_date)
-                  } else if (sortKey === 'quartile') {
-                    cmp = (a.quartile ?? 0) - (b.quartile ?? 0)
-                  } else {
-                    cmp = a.side.localeCompare(b.side)
+                  switch (sortKey) {
+                    case 'date':
+                      cmp = a.exec_date.localeCompare(b.exec_date)
+                      break
+                    case 'symbol':
+                      cmp = a.symbol.localeCompare(b.symbol)
+                      break
+                    case 'botType':
+                      cmp = (a.bot_type || '').localeCompare(b.bot_type || '')
+                      break
+                    case 'trade':
+                      cmp = a.trade_id.localeCompare(b.trade_id, undefined, { numeric: true })
+                      break
+                    case 'side':
+                      cmp = a.side.localeCompare(b.side)
+                      break
+                    case 'price':
+                      cmp = a.exec_price - b.exec_price
+                      break
+                    case 'qty':
+                      cmp = a.qty - b.qty
+                      break
+                    case 'quartile':
+                      cmp = (a.quartile ?? 0) - (b.quartile ?? 0)
+                      break
+                    case 'result':
+                      cmp = Number(a.correct) - Number(b.correct)
+                      break
                   }
                   return cmp * dir
                 })
-              const toggleSort = (key: 'date' | 'quartile' | 'side') => {
+              const toggleSort = (key: SortKey) => {
                 if (sortKey === key) {
                   setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
                 } else {
@@ -445,13 +468,13 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
                   setSortDir('asc')
                 }
               }
-              const SortArrow = ({ k }: { k: 'date' | 'quartile' | 'side' }) =>
+              const SortArrow = ({ k }: { k: SortKey }) =>
                 sortKey === k ? (
                   <span className="text-accent text-base font-bold ml-1">{sortDir === 'asc' ? '▲' : '▼'}</span>
                 ) : (
                   <span className="text-slate-500 text-base font-bold ml-1">⇅</span>
                 )
-              const thSort = (k: 'date' | 'quartile' | 'side') =>
+              const thSort = (k: SortKey) =>
                 sortKey === k ? 'text-accent' : 'hover:text-white'
               const pageCount = Math.max(1, Math.ceil(filtered.length / EXEC_PAGE_SIZE))
               const page = Math.min(execPage, pageCount - 1)
@@ -503,24 +526,54 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
                           >
                             Date<SortArrow k="date" />
                           </th>
-                          <th className="text-left py-2 pr-4">Symbol</th>
-                          <th className="text-left py-2 pr-4">Bot Type</th>
-                          <th className="text-left py-2 pr-4">Trade</th>
+                          <th
+                            onClick={() => toggleSort('symbol')}
+                            className={`text-left py-2 pr-4 cursor-pointer select-none whitespace-nowrap transition-colors ${thSort('symbol')}`}
+                          >
+                            Symbol<SortArrow k="symbol" />
+                          </th>
+                          <th
+                            onClick={() => toggleSort('botType')}
+                            className={`text-left py-2 pr-4 cursor-pointer select-none whitespace-nowrap transition-colors ${thSort('botType')}`}
+                          >
+                            Bot Type<SortArrow k="botType" />
+                          </th>
+                          <th
+                            onClick={() => toggleSort('trade')}
+                            className={`text-left py-2 pr-4 cursor-pointer select-none whitespace-nowrap transition-colors ${thSort('trade')}`}
+                          >
+                            Trade<SortArrow k="trade" />
+                          </th>
                           <th
                             onClick={() => toggleSort('side')}
                             className={`text-left py-2 pr-4 cursor-pointer select-none whitespace-nowrap transition-colors ${thSort('side')}`}
                           >
                             Side<SortArrow k="side" />
                           </th>
-                          <th className="text-right py-2 pr-4">Price</th>
-                          <th className="text-right py-2 pr-4">Qty</th>
+                          <th
+                            onClick={() => toggleSort('price')}
+                            className={`text-right py-2 pr-4 cursor-pointer select-none whitespace-nowrap transition-colors ${thSort('price')}`}
+                          >
+                            Price<SortArrow k="price" />
+                          </th>
+                          <th
+                            onClick={() => toggleSort('qty')}
+                            className={`text-right py-2 pr-4 cursor-pointer select-none whitespace-nowrap transition-colors ${thSort('qty')}`}
+                          >
+                            Qty<SortArrow k="qty" />
+                          </th>
                           <th
                             onClick={() => toggleSort('quartile')}
                             className={`text-center py-2 pr-4 cursor-pointer select-none whitespace-nowrap transition-colors ${thSort('quartile')}`}
                           >
                             Quartile<SortArrow k="quartile" />
                           </th>
-                          <th className="text-center py-2">Result</th>
+                          <th
+                            onClick={() => toggleSort('result')}
+                            className={`text-center py-2 pr-2 cursor-pointer select-none whitespace-nowrap transition-colors ${thSort('result')}`}
+                          >
+                            Result<SortArrow k="result" />
+                          </th>
                         </tr>
                       </thead>
                       <tbody>
