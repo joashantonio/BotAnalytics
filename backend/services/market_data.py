@@ -41,6 +41,12 @@ def _download_ohlcv(ticker: str, from_date: str, to_date: str) -> pd.DataFrame:
     return df.iloc[: last_real + 1]
 
 def fetch_ohlcv(ticker: str, from_date: str, to_date: str) -> pd.DataFrame:
+    # If to_date is in the future, clamp it to tomorrow (today + 1 day) so we don't cache future dates
+    # and ensure today's candle is always included since yfinance download end is exclusive.
+    tomorrow_str = (pd.Timestamp.today() + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+    if to_date > tomorrow_str:
+        to_date = tomorrow_str
+
     from ..cache import get_ohlcv, set_ohlcv
     cached = get_ohlcv(ticker, from_date, to_date)
     if cached is not None:

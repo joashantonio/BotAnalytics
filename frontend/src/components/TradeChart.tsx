@@ -257,7 +257,7 @@ export default function TradeChart({ data, highlightExec, showProfitPct }: Props
         pct: ((c.high - avgBuy) / avgBuy) * 100,
       }))
       candleSeries.attachPrimitive(
-        new ProfitPctPrimitive(points, { positive: COLORS.candleUp, negative: COLORS.candleDown }),
+        new ProfitPctPrimitive(points, { positive: COLORS.candleUp, negative: '#ff9800' }),
       )
     }
 
