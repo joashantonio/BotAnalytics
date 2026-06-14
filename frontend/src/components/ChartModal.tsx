@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import type { SelectedExec } from '../types'
 import TradeChart from './TradeChart'
 import { useChart } from '../hooks/useChart'
@@ -39,6 +39,7 @@ export default function ChartModal({
   onClose,
 }: Props) {
   const { data, loading, error, load } = useChart(sessionId, suffix, PLOT_MODE[mode])
+  const [showProfitPct, setShowProfitPct] = useState(false)
 
   useEffect(() => {
     load(symbol, tradeId)
@@ -99,9 +100,21 @@ export default function ChartModal({
               {symbol} · Trade {tradeId}
             </span>
           )}
+          {data && (
+            <button
+              onClick={() => setShowProfitPct((v) => !v)}
+              className={`ml-auto px-2 py-1 rounded border text-xs transition-colors ${
+                showProfitPct
+                  ? 'bg-accent/20 text-accent border-accent font-medium'
+                  : 'bg-surface text-slate-400 border-border hover:text-white'
+              }`}
+            >
+              % Profit vs Avg Buy
+            </button>
+          )}
           <button
             onClick={onClose}
-            className="ml-auto text-slate-400 hover:text-white text-xl leading-none px-1"
+            className={`${data ? '' : 'ml-auto '}text-slate-400 hover:text-white text-xl leading-none px-1`}
             aria-label="Close"
           >
             ×
@@ -123,7 +136,7 @@ export default function ChartModal({
               </div>
             </div>
           )}
-          {data && <TradeChart data={data} highlightExec={exec} />}
+          {data && <TradeChart data={data} highlightExec={exec} showProfitPct={showProfitPct} />}
         </div>
       </div>
     </div>
