@@ -142,6 +142,10 @@ def build_chart_data(
 
     start_i, end_i = compute_chart_window(df_wide, trend_w, sar_w, entry_date, exit_date, orders)
     start_i, end_i = _widen_window_for_range(df_wide, start_i, end_i, from_date, to_date)
+    # Completed trades exit before "today", so the cycle window stops near the
+    # exit date. Always show through to the most recent available candle so the
+    # chart isn't stuck on stale data as time passes.
+    end_i = len(df_wide) - 1
     df = df_wide.iloc[start_i: end_i + 1].copy()
 
     if df.empty:
@@ -357,6 +361,10 @@ def build_chart_data_ma10(
 
     start_i, end_i = ma10_mod.compute_chart_window(df_wide, trend_w, entry_date, exit_date, orders)
     start_i, end_i = _widen_window_for_range(df_wide, start_i, end_i, from_date, to_date)
+    # Completed trades exit before "today", so the cycle window stops near the
+    # exit date. Always show through to the most recent available candle so the
+    # chart isn't stuck on stale data as time passes.
+    end_i = len(df_wide) - 1
     df = df_wide.iloc[start_i: end_i + 1].copy()
 
     if df.empty:
@@ -731,6 +739,10 @@ def build_chart_data_ma200(
     start_i = max(start_i, first_ma_i)
     if end_i < start_i:
         end_i = start_i
+    # Completed trades exit before "today", so the order-span window stops near
+    # the exit date. Always show through to the most recent available candle so
+    # the chart isn't stuck on stale data as time passes.
+    end_i = len(df_wide) - 1
     df = df_wide.iloc[start_i: end_i + 1].copy()
 
     if df.empty:

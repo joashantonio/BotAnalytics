@@ -65,5 +65,9 @@ def get_company_name(ticker: str) -> str:
 
 def fetch_wide(ticker: str, entry_date: str, exit_date: str, lookback_days: int = 120) -> pd.DataFrame:
     wide_from = (pd.Timestamp(entry_date) - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
-    wide_to = (pd.Timestamp(exit_date) + timedelta(days=lookback_days)).strftime("%Y-%m-%d")
+    # Always extend the window through today so charts for trades that exited
+    # long ago still display the latest available candles, not just data up to
+    # their exit date.
+    wide_to_exit = pd.Timestamp(exit_date) + timedelta(days=lookback_days)
+    wide_to = max(wide_to_exit, pd.Timestamp.today()).strftime("%Y-%m-%d")
     return fetch_ohlcv(ticker, wide_from, wide_to)

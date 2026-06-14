@@ -26,6 +26,7 @@ export default function ChartPage({
   const [fromDate, setFromDate] = useState('')
   const [toDate, setToDate] = useState('')
   const [indicatorMode, setIndicatorMode] = useState<'psar' | 'ma10' | 'ma200'>('psar')
+  const [showProfitPct, setShowProfitPct] = useState(false)
   const { data, loading, error, load } = useChart(
     session?.session_id ?? '',
     suffix,
@@ -122,6 +123,17 @@ export default function ChartPage({
               </button>
             </div>
           </div>
+
+          <button
+            onClick={() => setShowProfitPct((v) => !v)}
+            className={`w-full px-2 py-1.5 rounded border text-xs transition-colors ${
+              showProfitPct
+                ? 'bg-accent/20 text-accent border-accent font-medium'
+                : 'bg-surface text-slate-400 border-border hover:text-white'
+            }`}
+          >
+            % Profit vs Avg Buy
+          </button>
 
           <select
             value={filterSymbol}
@@ -290,7 +302,7 @@ export default function ChartPage({
               <p className="text-slate-500 text-sm">Select a trade from the sidebar</p>
             </div>
           )}
-          {data && <TradeChart data={data} highlightExec={selectedExec} />}
+          {data && <TradeChart data={data} highlightExec={selectedExec} showProfitPct={showProfitPct} />}
         </div>
       </div>
     </div>
