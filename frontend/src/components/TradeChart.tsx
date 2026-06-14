@@ -14,11 +14,14 @@ import { QuartileBoxPrimitive } from './QuartileBoxPrimitive'
 import { PinMarkerPrimitive, type PinMarker, type PinHighlight } from './PinMarkerPrimitive'
 import { ExecDateHighlightPrimitive } from './ExecDateHighlightPrimitive'
 import { SelectedExecLinePrimitive } from './SelectedExecLinePrimitive'
+import { ProfitPctPrimitive } from './ProfitPctPrimitive'
 
 interface Props {
   data: ChartData
   /** Execution picked from the Executions table to emphasise; null otherwise. */
   highlightExec?: SelectedExec | null
+  /** When true, show each candle's profit % vs. avg buy: (high - avgBuy) / avgBuy * 100. */
+  showProfitPct?: boolean
 }
 
 const COLORS = {
@@ -41,7 +44,7 @@ const COLORS = {
   mixed: '#1565c0',
 }
 
-export default function TradeChart({ data, highlightExec }: Props) {
+export default function TradeChart({ data, highlightExec, showProfitPct }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
   const candleRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
@@ -245,6 +248,19 @@ export default function TradeChart({ data, highlightExec }: Props) {
       candleSeries.attachPrimitive(new QuartileBoxPrimitive(data.quartile_boxes))
     }
 
+    // ── Per-candle profit % vs. avg buy ─────────────────────────────────────
+    if (showProfitPct && data.avg_buy != null && data.avg_buy !== 0) {
+      const avgBuy = data.avg_buy
+      const points = data.candles.map((c) => ({
+        time: c.time,
+        high: c.high,
+        pct: ((c.high - avgBuy) / avgBuy) * 100,
+      }))
+      candleSeries.attachPrimitive(
+        new ProfitPctPrimitive(points, { positive: COLORS.candleUp, negative: '#ff9800' }),
+      )
+    }
+
     chart.timeScale().fitContent()
 
     const handleResize = () => {
@@ -260,7 +276,7 @@ export default function TradeChart({ data, highlightExec }: Props) {
       chartRef.current = null
       candleRef.current = null
     }
-  }, [data, highlightExec])
+  }, [data, highlightExec, showProfitPct])
 
   return <div ref={containerRef} className="w-full h-full" />
 }

@@ -1,3 +1,4 @@
+import pandas as pd
 from fastapi import APIRouter, HTTPException, Query
 
 from ..services.chart_builder import build_chart_data, build_chart_data_ma10, build_chart_data_ma200, build_analytics, compute_correct_executions
@@ -136,10 +137,14 @@ async def get_chart_endpoint(
         raise HTTPException(status_code=422, detail="from_date must be on or before to_date")
 
     range_part = f"::{from_date or ''}:{to_date or ''}" if (from_date or to_date) else ""
+    # Every chart now extends through today's latest candle (see fetch_wide), so
+    # the cached payload must be rebuilt once per day for every trade — otherwise
+    # a chart built today keeps being served unchanged on later days.
+    today_part = f"::{pd.Timestamp.today().strftime('%Y-%m-%d')}"
     # Always version the key (incl. PSAR). Previously PSAR with no range cached
     # under a bare suffix with no version, so payload-shape changes (e.g. adding
     # bot_type) were never cache-busted and stale-shaped rows kept being served.
-    cache_suffix = f"{suffix}::{mode}::v23{range_part}"
+    cache_suffix = f"{suffix}::{mode}::v24{range_part}{today_part}"
 
     cached = get_chart(session_id, trade_id, symbol, cache_suffix)
     if cached is not None:

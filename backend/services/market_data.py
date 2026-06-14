@@ -67,6 +67,12 @@ def _download_ohlcv(ticker: str, from_date: str, to_date: str) -> pd.DataFrame:
     return df.iloc[: last_real + 1]
 
 def fetch_ohlcv(ticker: str, from_date: str, to_date: str) -> pd.DataFrame:
+    # If to_date is in the future, clamp it to tomorrow (today + 1 day) so we don't cache future dates
+    # and ensure today's candle is always included since yfinance download end is exclusive.
+    tomorrow_str = (pd.Timestamp.today() + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+    if to_date > tomorrow_str:
+        to_date = tomorrow_str
+
     from ..cache import get_ohlcv, set_ohlcv
     cached = get_ohlcv(ticker, from_date, to_date)
     if cached is not None:
@@ -91,5 +97,9 @@ def get_company_name(ticker: str) -> str:
 
 def fetch_wide(ticker: str, entry_date: str, exit_date: str, lookback_days: int = 120) -> pd.DataFrame:
     wide_from = (pd.Timestamp(entry_date) - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
-    wide_to = (pd.Timestamp(exit_date) + timedelta(days=lookback_days)).strftime("%Y-%m-%d")
+    # Always extend the window through today so charts for trades that exited
+    # long ago still display the latest available candles, not just data up to
+    # their exit date.
+    wide_to_exit = pd.Timestamp(exit_date) + timedelta(days=lookback_days)
+    wide_to = max(wide_to_exit, pd.Timestamp.today()).strftime("%Y-%m-%d")
     return fetch_ohlcv(ticker, wide_from, wide_to)
