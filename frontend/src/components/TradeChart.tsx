@@ -249,13 +249,20 @@ export default function TradeChart({ data, highlightExec, showProfitPct }: Props
     }
 
     // ── Per-candle profit % vs. avg buy ─────────────────────────────────────
+    // Only shown for candles after the last execution (buy or sell) — i.e.
+    // the unrealized run following the most recent trade activity.
     if (showProfitPct && data.avg_buy != null && data.avg_buy !== 0) {
       const avgBuy = data.avg_buy
-      const points = data.candles.map((c) => ({
-        time: c.time,
-        high: c.high,
-        pct: ((c.high - avgBuy) / avgBuy) * 100,
-      }))
+      const allExecTimes = [...data.buy_markers, ...data.sell_markers].map((m) => m.time)
+      const lastExecTime =
+        allExecTimes.length > 0 ? allExecTimes.sort()[allExecTimes.length - 1] : undefined
+      const points = data.candles
+        .filter((c) => lastExecTime == null || c.time > lastExecTime)
+        .map((c) => ({
+          time: c.time,
+          high: c.high,
+          pct: ((c.high - avgBuy) / avgBuy) * 100,
+        }))
       candleSeries.attachPrimitive(
         new ProfitPctPrimitive(points, { positive: COLORS.candleUp, negative: '#ff9800' }),
       )
