@@ -70,20 +70,18 @@ export default function ChartModal({
               <span className="font-bold text-white">{data.company_name}</span>
               <span className="font-mono text-xs text-slate-400">{data.ticker} · D</span>
               <span
-                className={`text-xs px-2 py-0.5 rounded font-medium ${
-                  data.status === 'completed'
-                    ? 'bg-buy/10 text-buy'
-                    : 'bg-orange-500/10 text-orange-400'
-                }`}
+                className={`text-xs px-2 py-0.5 rounded font-medium ${data.status === 'completed'
+                  ? 'bg-buy/10 text-buy'
+                  : 'bg-orange-500/10 text-orange-400'
+                  }`}
               >
                 {data.status === 'completed' ? 'Completed' : 'Ongoing'}
               </span>
               <span className="text-xs text-slate-400">{data.cycle_direction}</span>
               {data.realized_pl != null && (
                 <span
-                  className={`text-xs font-semibold ${
-                    data.realized_pl >= 0 ? 'text-buy' : 'text-sell'
-                  }`}
+                  className={`text-xs font-semibold ${data.realized_pl >= 0 ? 'text-buy' : 'text-sell'
+                    }`}
                 >
                   P&L {data.realized_pl.toLocaleString(undefined, { minimumFractionDigits: 2 })}
                 </span>
@@ -100,25 +98,26 @@ export default function ChartModal({
               {symbol} · Trade {tradeId}
             </span>
           )}
-          {data && (
-            <button
-              onClick={() => setShowProfitPct((v) => !v)}
-              className={`ml-auto px-2 py-1 rounded border text-xs transition-colors ${
-                showProfitPct
+          <div className="ml-auto flex items-center gap-3 shrink-0">
+            {data && (
+              <button
+                onClick={() => setShowProfitPct((v) => !v)}
+                className={`px-2 py-1 rounded border text-xs transition-colors ${showProfitPct
                   ? 'bg-accent/20 text-accent border-accent font-medium'
                   : 'bg-surface text-slate-400 border-border hover:text-white'
-              }`}
+                  }`}
+              >
+                % Profit vs Avg Buy
+              </button>
+            )}
+            <button
+              onClick={onClose}
+              className="text-slate-400 hover:text-white text-xl leading-none px-1"
+              aria-label="Close"
             >
-              % Profit vs Avg Buy
+              ×
             </button>
-          )}
-          <button
-            onClick={onClose}
-            className={`${data ? '' : 'ml-auto '}text-slate-400 hover:text-white text-xl leading-none px-1`}
-            aria-label="Close"
-          >
-            ×
-          </button>
+          </div>
         </div>
 
         {/* chart */}
