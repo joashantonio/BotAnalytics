@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { Routes, Route } from 'react-router-dom'
 import Navbar from './components/Navbar'
 import UploadPage from './pages/UploadPage'
+import DashboardPage from './pages/DashboardPage'
 import TradesPage from './pages/TradesPage'
 import ChartPage from './pages/ChartPage'
 import AnalyticsPage from './pages/AnalyticsPage'
@@ -68,6 +69,7 @@ export default function App() {
       <Navbar />
       <main className="flex-1 overflow-hidden">
         <Routes>
+          <Route path="/dashboard" element={<DashboardPage suffix={suffix} />} />
           <Route
             path="/"
             element={

@@ -15,6 +15,7 @@ import { PinMarkerPrimitive, type PinMarker, type PinHighlight } from './PinMark
 import { ExecDateHighlightPrimitive } from './ExecDateHighlightPrimitive'
 import { SelectedExecLinePrimitive } from './SelectedExecLinePrimitive'
 import { ProfitPctPrimitive } from './ProfitPctPrimitive'
+import { chartChrome } from '../lib/chartTheme'
 
 interface Props {
   data: ChartData
@@ -22,6 +23,8 @@ interface Props {
   highlightExec?: SelectedExec | null
   /** When true, show each candle's profit % vs. avg buy: (high - avgBuy) / avgBuy * 100. */
   showProfitPct?: boolean
+  /** App theme; passed so the chart re-creates with matching chrome on toggle. */
+  theme?: 'dark' | 'light'
 }
 
 const COLORS = {
@@ -44,7 +47,7 @@ const COLORS = {
   mixed: '#1565c0',
 }
 
-export default function TradeChart({ data, highlightExec, showProfitPct }: Props) {
+export default function TradeChart({ data, highlightExec, showProfitPct, theme }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
   const candleRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
@@ -52,23 +55,24 @@ export default function TradeChart({ data, highlightExec, showProfitPct }: Props
   useEffect(() => {
     if (!containerRef.current) return
 
+    const chrome = chartChrome(theme)
     const chart = createChart(containerRef.current, {
       layout: {
-        background: { color: COLORS.bg },
-        textColor: COLORS.text,
+        background: { color: chrome.bg },
+        textColor: chrome.text,
       },
       grid: {
-        vertLines: { color: COLORS.grid },
-        horzLines: { color: COLORS.grid },
+        vertLines: { color: chrome.grid },
+        horzLines: { color: chrome.grid },
       },
       crosshair: {
         mode: CrosshairMode.Normal,
       },
       rightPriceScale: {
-        borderColor: COLORS.border,
+        borderColor: chrome.border,
       },
       timeScale: {
-        borderColor: COLORS.border,
+        borderColor: chrome.border,
         timeVisible: true,
         secondsVisible: false,
         // Bears Bot (MA200) boxes can run right up to the latest candle (ongoing
@@ -283,7 +287,7 @@ export default function TradeChart({ data, highlightExec, showProfitPct }: Props
       chartRef.current = null
       candleRef.current = null
     }
-  }, [data, highlightExec, showProfitPct])
+  }, [data, highlightExec, showProfitPct, theme])
 
   return <div ref={containerRef} className="w-full h-full" />
 }

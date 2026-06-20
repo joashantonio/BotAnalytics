@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import type { SelectedExec } from '../types'
 import TradeChart from './TradeChart'
 import { useChart } from '../hooks/useChart'
+import { useTheme } from '../hooks/useTheme'
 
 interface Props {
   sessionId: string
@@ -40,6 +41,7 @@ export default function ChartModal({
 }: Props) {
   const { data, loading, error, load } = useChart(sessionId, suffix, PLOT_MODE[mode])
   const [showProfitPct, setShowProfitPct] = useState(false)
+  const { theme } = useTheme()
 
   useEffect(() => {
     load(symbol, tradeId)
@@ -135,7 +137,7 @@ export default function ChartModal({
               </div>
             </div>
           )}
-          {data && <TradeChart data={data} highlightExec={exec} showProfitPct={showProfitPct} />}
+          {data && <TradeChart data={data} highlightExec={exec} showProfitPct={showProfitPct} theme={theme} />}
         </div>
       </div>
     </div>

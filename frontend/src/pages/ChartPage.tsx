@@ -3,6 +3,7 @@ import { api } from '../api/client'
 import type { SelectedExec, TradeRow, UploadResponse } from '../types'
 import TradeChart from '../components/TradeChart'
 import { useChart } from '../hooks/useChart'
+import { useTheme } from '../hooks/useTheme'
 
 interface Props {
   session: UploadResponse | null
@@ -34,6 +35,7 @@ export default function ChartPage({
     fromDate || undefined,
     toDate || undefined,
   )
+  const { theme } = useTheme()
 
   useEffect(() => {
     if (!session) return
@@ -302,7 +304,7 @@ export default function ChartPage({
               <p className="text-slate-500 text-sm">Select a trade from the sidebar</p>
             </div>
           )}
-          {data && <TradeChart data={data} highlightExec={selectedExec} showProfitPct={showProfitPct} />}
+          {data && <TradeChart data={data} highlightExec={selectedExec} showProfitPct={showProfitPct} theme={theme} />}
         </div>
       </div>
     </div>

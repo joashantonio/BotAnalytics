@@ -3,7 +3,7 @@ import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .routers import trades, symbols
+from .routers import trades, symbols, dashboard
 
 app = FastAPI(title="Trade Handler API", version="1.0.0")
 
@@ -19,6 +19,7 @@ app.add_middleware(
 
 app.include_router(trades.router)
 app.include_router(symbols.router)
+app.include_router(dashboard.router)
 
 
 @app.get("/health")

@@ -1,5 +1,6 @@
 import type {
   Analytics,
+  BotAnalytics,
   ChartData,
   CorrectExecutions,
   PrefetchStatusResponse,
@@ -96,4 +97,8 @@ export const api = {
 
   getPrefetchStatus: (sessionId: string): Promise<PrefetchStatusResponse> =>
     req(`/trades/sessions/${sessionId}/prefetch-status`),
+
+  // Cross-wallet bot accuracy for the Dashboard (all uploaded sessions).
+  getBotAnalytics: (suffix = '.SR'): Promise<BotAnalytics> =>
+    req(`/dashboard/bot-analytics?suffix=${encodeURIComponent(suffix.trim())}`),
 }

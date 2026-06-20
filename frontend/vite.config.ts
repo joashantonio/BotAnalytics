@@ -8,6 +8,7 @@ export default defineConfig({
     proxy: {
       '/trades': 'http://localhost:8000',
       '/symbols': 'http://localhost:8000',
+      '/dashboard/bot-analytics': 'http://localhost:8000',
       '/health': 'http://localhost:8000',
     },
   },

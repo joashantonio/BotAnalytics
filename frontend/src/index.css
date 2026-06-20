@@ -2,14 +2,43 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ── Theme tokens ──────────────────────────────────────────────────────────
+   Dark is the default (no class needed). Adding `light` to <html> flips the
+   neutral palette. Brand colours (buy/sell/accent/avg*) are unchanged — they
+   read fine on both backgrounds. Charts read these same values via JS, see
+   the `theme` prop threaded into TradeChart / DriftChart. */
+:root {
+  --app-bg: #1a1d23;       /* surface */
+  --app-panel: #22262f;
+  --app-border: #2d3240;
+  --app-text: #e2e8f0;     /* body / slate-300-ish */
+  --app-heading: #ffffff;  /* text-white */
+  --app-muted: #94a3b8;    /* slate-400 */
+  --app-faint: #64748b;    /* slate-500 */
+  --app-scroll-track: #22262f;
+  --app-scroll-thumb: #3b4151;
+}
+
+html.light {
+  --app-bg: #f5f6f8;
+  --app-panel: #ffffff;
+  --app-border: #d8dce4;
+  --app-text: #1e293b;
+  --app-heading: #0f172a;
+  --app-muted: #475569;
+  --app-faint: #64748b;
+  --app-scroll-track: #e7e9ee;
+  --app-scroll-thumb: #b6bcc8;
+}
+
 * {
   box-sizing: border-box;
 }
 
 body {
   margin: 0;
-  background-color: #1a1d23;
-  color: #e2e8f0;
+  background-color: var(--app-bg);
+  color: var(--app-text);
   font-family: 'Inter', system-ui, -apple-system, sans-serif;
 }
 
@@ -18,9 +47,25 @@ body {
   height: 6px;
 }
 ::-webkit-scrollbar-track {
-  background: #22262f;
+  background: var(--app-scroll-track);
 }
 ::-webkit-scrollbar-thumb {
-  background: #3b4151;
+  background: var(--app-scroll-thumb);
   border-radius: 3px;
 }
+
+/* ── Map the neutral Tailwind utilities to theme tokens ─────────────────────
+   These utilities are used in ~180 places. Re-pointing them at the CSS vars
+   here themes the whole app without editing every component. Brand utilities
+   (bg-buy, text-accent, …) are intentionally left alone. */
+.bg-surface { background-color: var(--app-bg) !important; }
+.bg-panel { background-color: var(--app-panel) !important; }
+.border-border { border-color: var(--app-border) !important; }
+.border-border\/50 { border-color: color-mix(in srgb, var(--app-border) 50%, transparent) !important; }
+
+.text-white { color: var(--app-heading) !important; }
+.text-slate-200 { color: var(--app-heading) !important; }
+.text-slate-300 { color: var(--app-text) !important; }
+.text-slate-400 { color: var(--app-muted) !important; }
+.text-slate-500 { color: var(--app-faint) !important; }
+.text-slate-600 { color: var(--app-faint) !important; }

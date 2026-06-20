@@ -157,6 +157,41 @@ export interface CorrectExecutions {
   executions: Execution[]
 }
 
+/** Buy/sell accuracy for one bot family, aggregated across all wallets. */
+export interface BotCard {
+  buy_total: number
+  buy_correct: number
+  buy_wrong: number
+  buy_pct: number
+  sell_total: number
+  sell_correct: number
+  sell_wrong: number
+  sell_pct: number
+  total: number
+  correct: number
+  overall_pct: number
+  wallets_active: number
+}
+
+/** One scored execution. Drives the drift chart, per-symbol table, and
+ * quartile distribution. */
+export interface BotExecPoint {
+  bot: 'maard' | 'bears'
+  side: 'buy' | 'sell'
+  correct: boolean
+  date: string
+  symbol: string
+  quartile: number | null
+}
+
+export interface BotAnalytics {
+  wallets: number
+  maard: BotCard
+  bears: BotCard
+  skipped_symbols: string[]
+  series: BotExecPoint[]
+}
+
 export interface SymbolBreakdown {
   symbol: string
   trades: number
