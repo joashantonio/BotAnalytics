@@ -18,6 +18,10 @@ env/
 .mypy_cache/
 .ruff_cache/
 
+# ── documents ──
+*.csv
+*.xlsx
+
 # ── Databases ──
 *.db
 *.sqlite
