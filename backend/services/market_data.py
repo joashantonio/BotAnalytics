@@ -48,9 +48,13 @@ def _json_to_df(raw: str) -> pd.DataFrame:
     return df
 
 def _download_ohlcv(ticker: str, from_date: str, to_date: str) -> pd.DataFrame:
+    # auto_adjust=False: real (unadjusted) historical prices. Adjusted prices
+    # are back-corrected for dividends/splits and drift away from what brokers
+    # actually executed at, so adjusted candles can sit below a real execution
+    # price recorded around the same date.
     df = yf.download(
         ticker, start=from_date, end=to_date,
-        interval="1d", auto_adjust=True, progress=False,
+        interval="1d", auto_adjust=False, progress=False,
     )
     if df.empty:
         raise ValueError(f"No market data for {ticker!r}")

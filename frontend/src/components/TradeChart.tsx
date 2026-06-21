@@ -253,15 +253,23 @@ export default function TradeChart({ data, highlightExec, showProfitPct, theme }
     }
 
     // ── Per-candle profit % vs. avg buy ─────────────────────────────────────
-    // Only shown for candles after the last execution (buy or sell) — i.e.
-    // the unrealized run following the most recent trade activity.
+    // Shown for candles after the last buy, up to (and excluding) the next
+    // sell after it if one exists — that span is the position's open run. A
+    // sell closes the position out, so there's no open profit past it.
     if (showProfitPct && data.avg_buy != null && data.avg_buy !== 0) {
       const avgBuy = data.avg_buy
-      const allExecTimes = [...data.buy_markers, ...data.sell_markers].map((m) => m.time)
-      const lastExecTime =
-        allExecTimes.length > 0 ? allExecTimes.sort()[allExecTimes.length - 1] : undefined
+      const buyTimes = data.buy_markers.map((m) => m.time).sort()
+      const sellTimes = data.sell_markers.map((m) => m.time).sort()
+      const lastBuyTime = buyTimes.length > 0 ? buyTimes[buyTimes.length - 1] : undefined
+      const sellAfterLastBuy =
+        lastBuyTime != null ? sellTimes.find((t) => t > lastBuyTime) : undefined
       const points = data.candles
-        .filter((c) => lastExecTime == null || c.time > lastExecTime)
+        .filter(
+          (c) =>
+            lastBuyTime != null &&
+            c.time > lastBuyTime &&
+            (sellAfterLastBuy == null || c.time < sellAfterLastBuy),
+        )
         .map((c) => ({
           time: c.time,
           high: c.high,
