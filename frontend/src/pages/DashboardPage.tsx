@@ -376,6 +376,8 @@ function BotCardBlock({ name, color, card }: { name: string; color: string; card
       <Row label="Buy accuracy" correct={card.buy_correct} wrong={card.buy_wrong} total={card.buy_total} p={card.buy_pct} />
       <div className="h-px bg-border" />
       <Row label="Sell accuracy" correct={card.sell_correct} wrong={card.sell_wrong} total={card.sell_total} p={card.sell_pct} />
+      <div className="h-px bg-border" />
+      <Row label="Overall accuracy" correct={card.correct} wrong={card.total - card.correct} total={card.total} p={card.overall_pct} />
     </div>
   )
 }
@@ -495,15 +497,10 @@ export default function DashboardPage({ suffix }: Props) {
     <div className="h-full overflow-y-auto">
       <div className="px-6 py-6 space-y-8 max-w-6xl mx-auto">
       <div>
-        <h1 className="text-2xl font-bold text-white">Dashboard</h1>
+        <h1 className="text-2xl font-bold text-white">Bot Behavior Dashboard</h1>
         <p className="text-sm text-slate-400 mt-1">
           Prediction accuracy across all uploaded wallets
           {data ? ` · ${data.wallets} wallet${data.wallets === 1 ? '' : 's'}` : ''}.
-          {isFiltered && (
-            <span className="text-accent">
-              {' '}· Date range: {from || '…'} → {to || '…'} (set at the bottom of the page).
-            </span>
-          )}
         </p>
       </div>
 
@@ -516,7 +513,7 @@ export default function DashboardPage({ suffix }: Props) {
           <div>
             <SectionHeader
               title="Bot Accuracy Cards"
-              explanation="Each card is one bot, summarising its buy and sell prediction accuracy across every uploaded wallet. A prediction is 'correct' when the trade lands on the right side of the bot's indicator trend (Maard = PSAR, Bears = MA200/MA10). Green ≥ 50%, red below. Numbers under each percentage show the correct ✓ and wrong ✗ execution counts."
+              explanation="Each card is one bot, summarising its buy, sell, and overall prediction accuracy across every uploaded wallet. A prediction is 'correct' when the trade lands on the right side of the bot's indicator trend (Maard = PSAR, Bears = MA200/MA10). Green ≥ 50%, red below. Numbers under each percentage show the correct ✓ and wrong ✗ execution counts."
               legend={[
                 ...(showMaard ? [{ label: 'Maard Bot', color: MAARD_COLOR }] : []),
                 ...(showBears ? [{ label: 'Bears Bot', color: BEARS_COLOR }] : []),
@@ -676,13 +673,6 @@ export default function DashboardPage({ suffix }: Props) {
                 className="border border-border rounded px-3 py-1.5 text-sm text-slate-200 hover:bg-surface disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 Show all history
-              </button>
-              <button
-                type="button"
-                onClick={() => onFrom(DEFAULT_FROM)}
-                className="border border-border rounded px-3 py-1.5 text-sm text-slate-200 hover:bg-surface"
-              >
-                Reset to {DEFAULT_FROM}
               </button>
             </div>
             <p className="text-xs text-slate-500 mt-3">

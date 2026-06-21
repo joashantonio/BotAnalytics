@@ -17,6 +17,7 @@
   --app-faint: #64748b;    /* slate-500 */
   --app-scroll-track: #22262f;
   --app-scroll-thumb: #3b4151;
+  --app-hover: #2d323d;    /* subtle lift on dark */
 }
 
 html.light {
@@ -29,6 +30,7 @@ html.light {
   --app-faint: #64748b;
   --app-scroll-track: #e7e9ee;
   --app-scroll-thumb: #b6bcc8;
+  --app-hover: #eef0f4;    /* subtle lift on light */
 }
 
 * {
@@ -60,6 +62,11 @@ body {
    (bg-buy, text-accent, …) are intentionally left alone. */
 .bg-surface { background-color: var(--app-bg) !important; }
 .bg-panel { background-color: var(--app-panel) !important; }
+
+/* Hover lift — raw Tailwind hover:bg-* tokens are near-black, jarring in light
+   mode. Re-point at the theme-aware hover token. */
+.hover\:bg-surface:hover { background-color: var(--app-hover) !important; }
+.hover\:bg-panel:hover { background-color: var(--app-hover) !important; }
 .border-border { border-color: var(--app-border) !important; }
 .border-border\/50 { border-color: color-mix(in srgb, var(--app-border) 50%, transparent) !important; }
 
