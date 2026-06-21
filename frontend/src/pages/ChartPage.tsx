@@ -28,6 +28,7 @@ export default function ChartPage({
   const [toDate, setToDate] = useState('')
   const [indicatorMode, setIndicatorMode] = useState<'psar' | 'ma10' | 'ma200'>('psar')
   const [showProfitPct, setShowProfitPct] = useState(false)
+  const [drawPriceRange, setDrawPriceRange] = useState(false)
   const { data, loading, error, load } = useChart(
     session?.session_id ?? '',
     suffix,
@@ -135,6 +136,17 @@ export default function ChartPage({
             }`}
           >
             % Profit vs Avg Buy
+          </button>
+
+          <button
+            onClick={() => setDrawPriceRange((v) => !v)}
+            className={`w-full px-2 py-1.5 rounded border text-xs transition-colors ${
+              drawPriceRange
+                ? 'bg-accent/20 text-accent border-accent font-medium'
+                : 'bg-surface text-slate-400 border-border hover:text-white'
+            }`}
+          >
+            Price Range {drawPriceRange ? '(click chart to draw)' : ''}
           </button>
 
           <select
@@ -304,7 +316,15 @@ export default function ChartPage({
               <p className="text-slate-500 text-sm">Select a trade from the sidebar</p>
             </div>
           )}
-          {data && <TradeChart data={data} highlightExec={selectedExec} showProfitPct={showProfitPct} theme={theme} />}
+          {data && (
+            <TradeChart
+              data={data}
+              highlightExec={selectedExec}
+              showProfitPct={showProfitPct}
+              drawPriceRange={drawPriceRange}
+              theme={theme}
+            />
+          )}
         </div>
       </div>
     </div>

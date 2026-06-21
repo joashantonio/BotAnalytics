@@ -8,6 +8,7 @@ import {
   type CandlestickData,
   type LineData,
   type Time,
+  type MouseEventParams,
 } from 'lightweight-charts'
 import type { ChartData, SelectedExec } from '../types'
 import { QuartileBoxPrimitive } from './QuartileBoxPrimitive'
@@ -15,6 +16,7 @@ import { PinMarkerPrimitive, type PinMarker, type PinHighlight } from './PinMark
 import { ExecDateHighlightPrimitive } from './ExecDateHighlightPrimitive'
 import { SelectedExecLinePrimitive } from './SelectedExecLinePrimitive'
 import { ProfitPctPrimitive } from './ProfitPctPrimitive'
+import { PriceRangePrimitive, type PriceRangeBox } from './PriceRangePrimitive'
 import { chartChrome } from '../lib/chartTheme'
 
 interface Props {
@@ -23,6 +25,8 @@ interface Props {
   highlightExec?: SelectedExec | null
   /** When true, show each candle's profit % vs. avg buy: (high - avgBuy) / avgBuy * 100. */
   showProfitPct?: boolean
+  /** When true, click-drag on the chart draws a Price Range box (high/low/Δ%). */
+  drawPriceRange?: boolean
   /** App theme; passed so the chart re-creates with matching chrome on toggle. */
   theme?: 'dark' | 'light'
 }
@@ -47,10 +51,13 @@ const COLORS = {
   mixed: '#1565c0',
 }
 
-export default function TradeChart({ data, highlightExec, showProfitPct, theme }: Props) {
+export default function TradeChart({ data, highlightExec, showProfitPct, drawPriceRange, theme }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
   const candleRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
+  const priceRangePrimitiveRef = useRef<PriceRangePrimitive | null>(null)
+  const priceRangeBoxesRef = useRef<PriceRangeBox[]>([])
+  const dragStartRef = useRef<{ time: Time; price: number } | null>(null)
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -85,6 +92,7 @@ export default function TradeChart({ data, highlightExec, showProfitPct, theme }
       handleScale: true,
     })
     chartRef.current = chart
+    priceRangeBoxesRef.current = []
 
     const candleSeries = chart.addCandlestickSeries({
       upColor: COLORS.candleUp,
@@ -280,6 +288,10 @@ export default function TradeChart({ data, highlightExec, showProfitPct, theme }
       )
     }
 
+    const priceRangePrimitive = new PriceRangePrimitive(priceRangeBoxesRef.current, COLORS.psar)
+    candleSeries.attachPrimitive(priceRangePrimitive)
+    priceRangePrimitiveRef.current = priceRangePrimitive
+
     chart.timeScale().fitContent()
 
     const handleResize = () => {
@@ -294,8 +306,70 @@ export default function TradeChart({ data, highlightExec, showProfitPct, theme }
       chart.remove()
       chartRef.current = null
       candleRef.current = null
+      priceRangePrimitiveRef.current = null
     }
   }, [data, highlightExec, showProfitPct, theme])
+
+  // ── Price Range draw mode ───────────────────────────────────────────────
+  // lightweight-charts has no native drag gesture, so a box is placed with
+  // two clicks: first click sets the anchor corner, mouse move previews the
+  // box, second click commits it. Boxes accumulate until the underlying
+  // chart data changes (new trade/symbol).
+  useEffect(() => {
+    const chart = chartRef.current
+    const series = candleRef.current
+    if (!chart || !series || !drawPriceRange) return
+
+    const toPoint = (param: MouseEventParams<Time>) => {
+      if (param.time == null || param.point == null) return null
+      const price = series.coordinateToPrice(param.point.y)
+      if (price == null) return null
+      return { time: param.time, price }
+    }
+
+    const handleMove = (param: MouseEventParams<Time>) => {
+      if (!dragStartRef.current) return
+      const point = toPoint(param)
+      if (!point) return
+      const preview: PriceRangeBox = {
+        time1: dragStartRef.current.time,
+        price1: dragStartRef.current.price,
+        time2: point.time,
+        price2: point.price,
+      }
+      priceRangePrimitiveRef.current?.setBoxes([...priceRangeBoxesRef.current, preview])
+    }
+
+    const handleClick = (param: MouseEventParams<Time>) => {
+      const point = toPoint(param)
+      if (!point) return
+
+      if (!dragStartRef.current) {
+        dragStartRef.current = point
+        return
+      }
+
+      const box: PriceRangeBox = {
+        time1: dragStartRef.current.time,
+        price1: dragStartRef.current.price,
+        time2: point.time,
+        price2: point.price,
+      }
+      priceRangeBoxesRef.current = [...priceRangeBoxesRef.current, box]
+      priceRangePrimitiveRef.current?.setBoxes(priceRangeBoxesRef.current)
+      dragStartRef.current = null
+    }
+
+    chart.subscribeClick(handleClick)
+    chart.subscribeCrosshairMove(handleMove)
+
+    return () => {
+      chart.unsubscribeClick(handleClick)
+      chart.unsubscribeCrosshairMove(handleMove)
+      dragStartRef.current = null
+      priceRangePrimitiveRef.current?.setBoxes(priceRangeBoxesRef.current)
+    }
+  }, [drawPriceRange, data])
 
   return <div ref={containerRef} className="w-full h-full" />
 }

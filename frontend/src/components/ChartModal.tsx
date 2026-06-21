@@ -41,6 +41,7 @@ export default function ChartModal({
 }: Props) {
   const { data, loading, error, load } = useChart(sessionId, suffix, PLOT_MODE[mode])
   const [showProfitPct, setShowProfitPct] = useState(false)
+  const [drawPriceRange, setDrawPriceRange] = useState(false)
   const { theme } = useTheme()
 
   useEffect(() => {
@@ -112,6 +113,17 @@ export default function ChartModal({
                 % Profit vs Avg Buy
               </button>
             )}
+            {data && (
+              <button
+                onClick={() => setDrawPriceRange((v) => !v)}
+                className={`px-2 py-1 rounded border text-xs transition-colors ${drawPriceRange
+                  ? 'bg-accent/20 text-accent border-accent font-medium'
+                  : 'bg-surface text-slate-400 border-border hover:text-white'
+                  }`}
+              >
+                Price Range
+              </button>
+            )}
             <button
               onClick={onClose}
               className="text-slate-400 hover:text-white text-xl leading-none px-1"
@@ -137,7 +149,15 @@ export default function ChartModal({
               </div>
             </div>
           )}
-          {data && <TradeChart data={data} highlightExec={exec} showProfitPct={showProfitPct} theme={theme} />}
+          {data && (
+            <TradeChart
+              data={data}
+              highlightExec={exec}
+              showProfitPct={showProfitPct}
+              drawPriceRange={drawPriceRange}
+              theme={theme}
+            />
+          )}
         </div>
       </div>
     </div>
