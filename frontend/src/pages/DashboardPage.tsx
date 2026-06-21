@@ -1,6 +1,13 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { api } from '../api/client'
 import type { BotAnalytics, BotCard, BotExecPoint } from '../types'
+
+// Date-range filter. Defaults the "From" date to 2026-05-19 so the dashboard
+// opens on the post-fix window, but the user can change or clear either bound
+// to view the full history — nothing is permanently hidden.
+const FROM_KEY = 'th:dash:from'
+const TO_KEY = 'th:dash:to'
+const DEFAULT_FROM = '2026-05-19'
 import DriftChart, { type DriftSeries } from '../components/DriftChart'
 import { lsGet, lsSet } from '../lib/storage'
 import { useTheme } from '../hooks/useTheme'
@@ -13,6 +20,12 @@ type Gran = 'day' | 'week' | 'month' | 'year'
 const GRAN_KEY = 'th:dash:gran'
 const isGran = (v: string | null): v is Gran =>
   v === 'day' || v === 'week' || v === 'month' || v === 'year'
+
+// Bot filter. 'both' shows Maard + Bears; 'maard'/'bears' show that bot only.
+type BotFilter = 'both' | 'maard' | 'bears'
+const BOT_KEY = 'th:dash:bot'
+const isBotFilter = (v: string | null): v is BotFilter =>
+  v === 'both' || v === 'maard' || v === 'bears'
 
 const pct = (n: number, d: number) => (d > 0 ? (n / d) * 100 : 0)
 const fmtPct = (n: number) => `${n.toFixed(1)}%`
@@ -48,6 +61,41 @@ function buildSeries(execs: BotExecPoint[], gran: Gran): DriftSeries[] {
   return [...buckets.entries()]
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
     .map(([time, b]) => ({ time, value: +pct(b.correct, b.total).toFixed(2) }))
+}
+
+/** Rebuild a bot's summary card from a (possibly date-filtered) exec list, so
+ * the cards/summary/bars reflect the same range as every other view. The
+ * backend card is whole-dataset; this recomputes counts from `execs`.
+ * wallets_active can't be recomputed (series carries no session id) so it is
+ * passed through from the backend card unchanged. */
+function cardFromExecs(execs: BotExecPoint[], wallets_active: number): BotCard {
+  let buy_total = 0, buy_correct = 0, sell_total = 0, sell_correct = 0
+  for (const e of execs) {
+    if (e.side === 'buy') {
+      buy_total += 1
+      if (e.correct) buy_correct += 1
+    } else {
+      sell_total += 1
+      if (e.correct) sell_correct += 1
+    }
+  }
+  const total = buy_total + sell_total
+  const correct = buy_correct + sell_correct
+  const round2 = (n: number, d: number) => (d > 0 ? +((n / d) * 100).toFixed(2) : 0)
+  return {
+    buy_total,
+    buy_correct,
+    buy_wrong: buy_total - buy_correct,
+    buy_pct: round2(buy_correct, buy_total),
+    sell_total,
+    sell_correct,
+    sell_wrong: sell_total - sell_correct,
+    sell_pct: round2(sell_correct, sell_total),
+    total,
+    correct,
+    overall_pct: round2(correct, total),
+    wallets_active,
+  }
 }
 
 const MAARD_COLOR = '#f57f17'
@@ -99,7 +147,17 @@ function SectionHeader({
 }
 
 // ── Overall summary table (both bots side by side) ───────────────────────────
-function SummaryTable({ maard, bears }: { maard: BotCard; bears: BotCard }) {
+function SummaryTable({
+  maard,
+  bears,
+  showMaard,
+  showBears,
+}: {
+  maard: BotCard
+  bears: BotCard
+  showMaard: boolean
+  showBears: boolean
+}) {
   const rows: { label: string; m: string; b: string; mGood?: boolean; bGood?: boolean }[] = [
     { label: 'Wallets active', m: String(maard.wallets_active), b: String(bears.wallets_active) },
     { label: 'Total executions', m: String(maard.total), b: String(bears.total) },
@@ -117,24 +175,32 @@ function SummaryTable({ maard, bears }: { maard: BotCard; bears: BotCard }) {
         <thead>
           <tr className="text-slate-400 border-b border-border">
             <th className="text-left py-2 pr-4">Metric</th>
-            <th className="text-right py-2 pr-4">
-              <span className="inline-flex items-center gap-1.5">
-                <span className="w-2 h-2 rounded-full" style={{ background: MAARD_COLOR }} /> Maard
-              </span>
-            </th>
-            <th className="text-right py-2">
-              <span className="inline-flex items-center gap-1.5">
-                <span className="w-2 h-2 rounded-full" style={{ background: BEARS_COLOR }} /> Bears
-              </span>
-            </th>
+            {showMaard && (
+              <th className="text-right py-2 pr-4">
+                <span className="inline-flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full" style={{ background: MAARD_COLOR }} /> Maard
+                </span>
+              </th>
+            )}
+            {showBears && (
+              <th className="text-right py-2">
+                <span className="inline-flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full" style={{ background: BEARS_COLOR }} /> Bears
+                </span>
+              </th>
+            )}
           </tr>
         </thead>
         <tbody>
           {rows.map((r) => (
             <tr key={r.label} className="border-b border-border/50">
               <td className="py-2 pr-4 text-slate-400">{r.label}</td>
-              <td className={`text-right py-2 pr-4 font-mono tabular-nums ${cell(r.m, r.mGood)}`}>{r.m}</td>
-              <td className={`text-right py-2 font-mono tabular-nums ${cell(r.b, r.bGood)}`}>{r.b}</td>
+              {showMaard && (
+                <td className={`text-right py-2 pr-4 font-mono tabular-nums ${cell(r.m, r.mGood)}`}>{r.m}</td>
+              )}
+              {showBears && (
+                <td className={`text-right py-2 font-mono tabular-nums ${cell(r.b, r.bGood)}`}>{r.b}</td>
+              )}
             </tr>
           ))}
         </tbody>
@@ -322,6 +388,19 @@ export default function DashboardPage({ suffix }: Props) {
     const s = lsGet(GRAN_KEY)
     return isGran(s) ? s : 'month'
   })
+  // Date-range bounds (YYYY-MM-DD). 'From' defaults to DEFAULT_FROM; '' = open.
+  const [from, setFrom] = useState<string>(() => {
+    const s = lsGet(FROM_KEY)
+    return s == null ? DEFAULT_FROM : s
+  })
+  const [to, setTo] = useState<string>(() => lsGet(TO_KEY) ?? '')
+  // Which bot(s) to display. Defaults to 'both'.
+  const [botFilter, setBotFilter] = useState<BotFilter>(() => {
+    const s = lsGet(BOT_KEY)
+    return isBotFilter(s) ? s : 'both'
+  })
+  const showMaard = botFilter === 'both' || botFilter === 'maard'
+  const showBears = botFilter === 'both' || botFilter === 'bears'
 
   useEffect(() => {
     let cancelled = false
@@ -347,16 +426,56 @@ export default function DashboardPage({ suffix }: Props) {
     setGran(g)
     lsSet(GRAN_KEY, g)
   }
+  const onFrom = (v: string) => {
+    setFrom(v)
+    lsSet(FROM_KEY, v)
+  }
+  const onTo = (v: string) => {
+    setTo(v)
+    lsSet(TO_KEY, v)
+  }
+  const onBotFilter = (b: BotFilter) => {
+    setBotFilter(b)
+    lsSet(BOT_KEY, b)
+  }
+  // Show full history: clear both bounds.
+  const showAll = () => {
+    onFrom('')
+    onTo('')
+  }
+  const isFiltered = from !== '' || to !== ''
+
+  // Apply the date-range filter to the raw series. Both bounds inclusive;
+  // either may be empty (open-ended). Dates are YYYY-MM-DD so string compare
+  // is chronological.
+  const filteredSeries = useMemo(() => {
+    if (!data) return []
+    return data.series.filter(
+      (e) => (from === '' || e.date >= from) && (to === '' || e.date <= to),
+    )
+  }, [data, from, to])
 
   // Split executions by bot once; reused by the drift chart, symbol tables,
-  // and quartile bars.
-  const { maardExecs, bearsExecs } = useMemo(() => {
-    if (!data) return { maardExecs: [], bearsExecs: [] }
+  // and quartile bars. Driven by the filtered series so every view respects
+  // the selected date range.
+  const { maardExecs, bearsExecs } = useMemo(
+    () => ({
+      maardExecs: filteredSeries.filter((e) => e.bot === 'maard'),
+      bearsExecs: filteredSeries.filter((e) => e.bot === 'bears'),
+    }),
+    [filteredSeries],
+  )
+
+  // Cards recomputed from the filtered execs so headline accuracy matches the
+  // range. wallets_active passes through from the backend (dataset-wide).
+  const { maardCard, bearsCard } = useMemo(() => {
+    if (!data) return { maardCard: null, bearsCard: null }
+    if (!isFiltered) return { maardCard: data.maard, bearsCard: data.bears }
     return {
-      maardExecs: data.series.filter((e) => e.bot === 'maard'),
-      bearsExecs: data.series.filter((e) => e.bot === 'bears'),
+      maardCard: cardFromExecs(maardExecs, data.maard.wallets_active),
+      bearsCard: cardFromExecs(bearsExecs, data.bears.wallets_active),
     }
-  }, [data])
+  }, [data, isFiltered, maardExecs, bearsExecs])
 
   const { maardSeries, bearsSeries } = useMemo(
     () => ({
@@ -380,13 +499,18 @@ export default function DashboardPage({ suffix }: Props) {
         <p className="text-sm text-slate-400 mt-1">
           Prediction accuracy across all uploaded wallets
           {data ? ` · ${data.wallets} wallet${data.wallets === 1 ? '' : 's'}` : ''}.
+          {isFiltered && (
+            <span className="text-accent">
+              {' '}· Date range: {from || '…'} → {to || '…'} (set at the bottom of the page).
+            </span>
+          )}
         </p>
       </div>
 
       {loading && <div className="text-slate-400 text-sm">Loading bot analytics…</div>}
       {error && <div className="text-sell text-sm">Error: {error}</div>}
 
-      {data && !loading && (
+      {data && !loading && maardCard && bearsCard && (
         <>
           {/* 4 metrics = 2 bots × (buy accuracy + sell accuracy) */}
           <div>
@@ -394,13 +518,13 @@ export default function DashboardPage({ suffix }: Props) {
               title="Bot Accuracy Cards"
               explanation="Each card is one bot, summarising its buy and sell prediction accuracy across every uploaded wallet. A prediction is 'correct' when the trade lands on the right side of the bot's indicator trend (Maard = PSAR, Bears = MA200/MA10). Green ≥ 50%, red below. Numbers under each percentage show the correct ✓ and wrong ✗ execution counts."
               legend={[
-                { label: 'Maard Bot', color: MAARD_COLOR },
-                { label: 'Bears Bot', color: BEARS_COLOR },
+                ...(showMaard ? [{ label: 'Maard Bot', color: MAARD_COLOR }] : []),
+                ...(showBears ? [{ label: 'Bears Bot', color: BEARS_COLOR }] : []),
               ]}
             />
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <BotCardBlock name="Maard Bot" color={MAARD_COLOR} card={data.maard} />
-              <BotCardBlock name="Bears Bot" color={BEARS_COLOR} card={data.bears} />
+            <div className={`grid grid-cols-1 gap-4 ${showMaard && showBears ? 'md:grid-cols-2' : ''}`}>
+              {showMaard && <BotCardBlock name="Maard Bot" color={MAARD_COLOR} card={maardCard} />}
+              {showBears && <BotCardBlock name="Bears Bot" color={BEARS_COLOR} card={bearsCard} />}
             </div>
           </div>
 
@@ -410,8 +534,8 @@ export default function DashboardPage({ suffix }: Props) {
               title="Prediction Drift Over Time"
               explanation="Tracks each bot's prediction accuracy over time so you can spot when a bot starts drifting (getting better or worse). The Y axis is accuracy % (0–100); the X axis is time. Each point = correct ÷ total executions in that period. Use the dropdown to change the time bucket — finer buckets (daily) are spikier; coarser (monthly/yearly) are smoother."
               legend={[
-                { label: 'Maard', color: MAARD_COLOR, shape: 'line' },
-                { label: 'Bears', color: BEARS_COLOR, shape: 'line' },
+                ...(showMaard ? [{ label: 'Maard', color: MAARD_COLOR, shape: 'line' as const }] : []),
+                ...(showBears ? [{ label: 'Bears', color: BEARS_COLOR, shape: 'line' as const }] : []),
               ]}
               right={
                 <select
@@ -426,12 +550,16 @@ export default function DashboardPage({ suffix }: Props) {
                 </select>
               }
             />
-            {maardSeries.length === 0 && bearsSeries.length === 0 ? (
+            {(!showMaard || maardSeries.length === 0) && (!showBears || bearsSeries.length === 0) ? (
               <div className="text-slate-400 text-sm py-12 text-center">
                 No scored executions yet. Upload wallets with a Bot column.
               </div>
             ) : (
-              <DriftChart maard={maardSeries} bears={bearsSeries} theme={theme} />
+              <DriftChart
+                maard={showMaard ? maardSeries : []}
+                bears={showBears ? bearsSeries : []}
+                theme={theme}
+              />
             )}
           </div>
 
@@ -442,11 +570,11 @@ export default function DashboardPage({ suffix }: Props) {
                 title="Overall Summary"
                 explanation="Side-by-side totals for both bots across all wallets: how many wallets each bot is active in, total executions, and overall / buy / sell accuracy. Percentages are green when ≥ 50% (more right than wrong) and red below. Use this to compare the two bots at a glance."
                 legend={[
-                  { label: 'Maard', color: MAARD_COLOR },
-                  { label: 'Bears', color: BEARS_COLOR },
+                  ...(showMaard ? [{ label: 'Maard', color: MAARD_COLOR }] : []),
+                  ...(showBears ? [{ label: 'Bears', color: BEARS_COLOR }] : []),
                 ]}
               />
-              <SummaryTable maard={data.maard} bears={data.bears} />
+              <SummaryTable maard={maardCard} bears={bearsCard} showMaard={showMaard} showBears={showBears} />
             </div>
             <div className="bg-panel border border-border rounded-lg p-5">
               <SectionHeader
@@ -458,8 +586,8 @@ export default function DashboardPage({ suffix }: Props) {
                 ]}
               />
               <div className="flex flex-col gap-6">
-                <BotBars name="Maard Bot" color={MAARD_COLOR} card={data.maard} />
-                <BotBars name="Bears Bot" color={BEARS_COLOR} card={data.bears} />
+                {showMaard && <BotBars name="Maard Bot" color={MAARD_COLOR} card={maardCard} />}
+                {showBears && <BotBars name="Bears Bot" color={BEARS_COLOR} card={bearsCard} />}
               </div>
             </div>
           </div>
@@ -470,13 +598,13 @@ export default function DashboardPage({ suffix }: Props) {
               title="Per-Symbol Breakdown"
               explanation="Breaks each bot's accuracy down by stock symbol so you can see which tickers a bot predicts well and which it struggles on. One table per bot, sorted by execution count (most-traded first). Columns: total executions, how many were correct, and the accuracy % (green ≥ 50%, red below). Scroll within a table if a bot has many symbols."
               legend={[
-                { label: 'Maard', color: MAARD_COLOR },
-                { label: 'Bears', color: BEARS_COLOR },
+                ...(showMaard ? [{ label: 'Maard', color: MAARD_COLOR }] : []),
+                ...(showBears ? [{ label: 'Bears', color: BEARS_COLOR }] : []),
               ]}
             />
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              <SymbolTable name="Maard Bot" color={MAARD_COLOR} rows={maardSymbols} />
-              <SymbolTable name="Bears Bot" color={BEARS_COLOR} rows={bearsSymbols} />
+            <div className={`grid grid-cols-1 gap-6 ${showMaard && showBears ? 'lg:grid-cols-2' : ''}`}>
+              {showMaard && <SymbolTable name="Maard Bot" color={MAARD_COLOR} rows={maardSymbols} />}
+              {showBears && <SymbolTable name="Bears Bot" color={BEARS_COLOR} rows={bearsSymbols} />}
             </div>
           </div>
 
@@ -486,13 +614,13 @@ export default function DashboardPage({ suffix }: Props) {
               title="Quartile Distribution"
               explanation="Of the executions a bot got right, this shows WHERE in the price trend block they landed, split into four quartiles. Q1 = weakest entry (barely on the right side), Q4 = strongest entry (best possible spot in the trend). Taller bars on the right (Q3–Q4) mean a bot isn't just correct — it's entering at strong prices. Only correct executions are counted here."
               legend={[
-                { label: 'Maard', color: MAARD_COLOR },
-                { label: 'Bears', color: BEARS_COLOR },
+                ...(showMaard ? [{ label: 'Maard', color: MAARD_COLOR }] : []),
+                ...(showBears ? [{ label: 'Bears', color: BEARS_COLOR }] : []),
               ]}
             />
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-              <QuartileBars name="Maard Bot" color={MAARD_COLOR} execs={maardExecs} />
-              <QuartileBars name="Bears Bot" color={BEARS_COLOR} execs={bearsExecs} />
+            <div className={`grid grid-cols-1 gap-8 ${showMaard && showBears ? 'lg:grid-cols-2' : ''}`}>
+              {showMaard && <QuartileBars name="Maard Bot" color={MAARD_COLOR} execs={maardExecs} />}
+              {showBears && <QuartileBars name="Bears Bot" color={BEARS_COLOR} execs={bearsExecs} />}
             </div>
           </div>
 
@@ -501,6 +629,67 @@ export default function DashboardPage({ suffix }: Props) {
               Skipped (no price data): {data.skipped_symbols.join(', ')}
             </p>
           )}
+
+          {/* Date-range filter — controls every view above. Defaults to a
+              start of 2026-05-19; clear or change either bound to see the full
+              history. Placed at the bottom of the page by request. */}
+          <div className="bg-panel border border-border rounded-lg p-5">
+            <SectionHeader
+              title="Filters"
+              explanation="The Bot selector chooses which bot(s) every view above shows — Maard only, Bears only, or both. The date range limits every chart and table to executions within the selected dates (both bounds inclusive); defaults to starting 2026-05-19. Leave a date field empty for an open bound, or click 'Show all history' to clear the date filter. wallets-active counts remain dataset-wide."
+            />
+            <div className="flex flex-wrap items-end gap-4">
+              <label className="flex flex-col gap-1 text-xs text-slate-400">
+                Bot
+                <select
+                  value={botFilter}
+                  onChange={(e) => onBotFilter(e.target.value as BotFilter)}
+                  className="bg-surface border border-border rounded px-3 py-1.5 text-sm text-white focus:outline-none focus:border-accent"
+                >
+                  <option value="both">Both bots</option>
+                  <option value="maard">Maard Bot</option>
+                  <option value="bears">Bears Bot</option>
+                </select>
+              </label>
+              <label className="flex flex-col gap-1 text-xs text-slate-400">
+                From
+                <input
+                  type="date"
+                  value={from}
+                  onChange={(e) => onFrom(e.target.value)}
+                  className="bg-surface border border-border rounded px-3 py-1.5 text-sm text-white focus:outline-none focus:border-accent"
+                />
+              </label>
+              <label className="flex flex-col gap-1 text-xs text-slate-400">
+                To
+                <input
+                  type="date"
+                  value={to}
+                  onChange={(e) => onTo(e.target.value)}
+                  className="bg-surface border border-border rounded px-3 py-1.5 text-sm text-white focus:outline-none focus:border-accent"
+                />
+              </label>
+              <button
+                type="button"
+                onClick={showAll}
+                disabled={!isFiltered}
+                className="border border-border rounded px-3 py-1.5 text-sm text-slate-200 hover:bg-surface disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                Show all history
+              </button>
+              <button
+                type="button"
+                onClick={() => onFrom(DEFAULT_FROM)}
+                className="border border-border rounded px-3 py-1.5 text-sm text-slate-200 hover:bg-surface"
+              >
+                Reset to {DEFAULT_FROM}
+              </button>
+            </div>
+            <p className="text-xs text-slate-500 mt-3">
+              Showing {filteredSeries.length} of {data.series.length} executions
+              {isFiltered ? ` · range ${from || '…'} → ${to || '…'}` : ' · full history'}.
+            </p>
+          </div>
         </>
       )}
       </div>
