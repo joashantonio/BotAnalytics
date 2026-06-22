@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api } from '../api/client'
 import type { SelectedExec, TradeRow, UploadResponse } from '../types'
-import TradeChart from '../components/TradeChart'
+import TradeChart, { type TradeChartHandle } from '../components/TradeChart'
 import { useChart } from '../hooks/useChart'
 import { useTheme } from '../hooks/useTheme'
 
@@ -29,6 +29,8 @@ export default function ChartPage({
   const [indicatorMode, setIndicatorMode] = useState<'psar' | 'ma10' | 'ma200'>('psar')
   const [showProfitPct, setShowProfitPct] = useState(false)
   const [drawPriceRange, setDrawPriceRange] = useState(false)
+  const [priceRangeCount, setPriceRangeCount] = useState(0)
+  const chartHandleRef = useRef<TradeChartHandle>(null)
   const { data, loading, error, load } = useChart(
     session?.session_id ?? '',
     suffix,
@@ -138,16 +140,26 @@ export default function ChartPage({
             % Profit vs Avg Buy
           </button>
 
-          <button
-            onClick={() => setDrawPriceRange((v) => !v)}
-            className={`w-full px-2 py-1.5 rounded border text-xs transition-colors ${
-              drawPriceRange
-                ? 'bg-accent/20 text-accent border-accent font-medium'
-                : 'bg-surface text-slate-400 border-border hover:text-white'
-            }`}
-          >
-            Price Range {drawPriceRange ? '(click chart to draw)' : ''}
-          </button>
+          <div className="flex items-center gap-1.5">
+            <button
+              onClick={() => setDrawPriceRange((v) => !v)}
+              className={`flex-1 px-2 py-1.5 rounded border text-xs transition-colors ${
+                drawPriceRange
+                  ? 'bg-accent/20 text-accent border-accent font-medium'
+                  : 'bg-surface text-slate-400 border-border hover:text-white'
+              }`}
+            >
+              Price Range {drawPriceRange ? '(click chart to draw)' : ''}
+            </button>
+            {priceRangeCount > 0 && (
+              <button
+                onClick={() => chartHandleRef.current?.clearPriceRanges()}
+                className="px-2 py-1.5 rounded border border-border text-xs text-slate-400 hover:text-white hover:border-sell transition-colors"
+              >
+                Clear
+              </button>
+            )}
+          </div>
 
           <select
             value={filterSymbol}
@@ -318,10 +330,12 @@ export default function ChartPage({
           )}
           {data && (
             <TradeChart
+              ref={chartHandleRef}
               data={data}
               highlightExec={selectedExec}
               showProfitPct={showProfitPct}
               drawPriceRange={drawPriceRange}
+              onPriceRangeCountChange={setPriceRangeCount}
               theme={theme}
             />
           )}

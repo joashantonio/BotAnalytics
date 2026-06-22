@@ -118,6 +118,26 @@ export class PriceRangePrimitive implements ISeriesPrimitive<Time> {
     this._requestUpdate?.()
   }
 
+  /** Index of the topmost box whose rect contains (x, y) in pixel space, or -1. */
+  findBoxAt(x: number, y: number): number {
+    if (!this._chart || !this._series) return -1
+    const timeScale = this._chart.timeScale()
+    for (let i = this._boxes.length - 1; i >= 0; i--) {
+      const box = this._boxes[i]
+      const x1 = timeScale.timeToCoordinate(box.time1)
+      const x2 = timeScale.timeToCoordinate(box.time2)
+      const y1 = this._series.priceToCoordinate(box.price1)
+      const y2 = this._series.priceToCoordinate(box.price2)
+      if (x1 == null || x2 == null || y1 == null || y2 == null) continue
+      const xLeft = Math.min(x1, x2)
+      const xRight = Math.max(x1, x2)
+      const yTop = Math.min(y1, y2)
+      const yBot = Math.max(y1, y2)
+      if (x >= xLeft && x <= xRight && y >= yTop && y <= yBot) return i
+    }
+    return -1
+  }
+
   private _rebuildViews(): void {
     if (!this._chart || !this._series) return
     this._paneViews = [new PriceRangePaneView(this._boxes, this._chart, this._series, this._color)]

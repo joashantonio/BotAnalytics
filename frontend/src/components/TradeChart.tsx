@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react'
 import {
   createChart,
   CrosshairMode,
@@ -27,8 +27,15 @@ interface Props {
   showProfitPct?: boolean
   /** When true, click-drag on the chart draws a Price Range box (high/low/Δ%). */
   drawPriceRange?: boolean
+  /** Called whenever the number of drawn Price Range boxes changes. */
+  onPriceRangeCountChange?: (count: number) => void
   /** App theme; passed so the chart re-creates with matching chrome on toggle. */
   theme?: 'dark' | 'light'
+}
+
+export interface TradeChartHandle {
+  /** Removes all drawn Price Range boxes. */
+  clearPriceRanges: () => void
 }
 
 const COLORS = {
@@ -51,13 +58,26 @@ const COLORS = {
   mixed: '#1565c0',
 }
 
-export default function TradeChart({ data, highlightExec, showProfitPct, drawPriceRange, theme }: Props) {
+const TradeChart = forwardRef<TradeChartHandle, Props>(function TradeChart(
+  { data, highlightExec, showProfitPct, drawPriceRange, onPriceRangeCountChange, theme },
+  ref,
+) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
   const candleRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
   const priceRangePrimitiveRef = useRef<PriceRangePrimitive | null>(null)
   const priceRangeBoxesRef = useRef<PriceRangeBox[]>([])
   const dragStartRef = useRef<{ time: Time; price: number } | null>(null)
+
+  const setPriceRangeBoxes = (boxes: PriceRangeBox[]) => {
+    priceRangeBoxesRef.current = boxes
+    priceRangePrimitiveRef.current?.setBoxes(boxes)
+    onPriceRangeCountChange?.(boxes.length)
+  }
+
+  useImperativeHandle(ref, () => ({
+    clearPriceRanges: () => setPriceRangeBoxes([]),
+  }))
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -93,6 +113,7 @@ export default function TradeChart({ data, highlightExec, showProfitPct, drawPri
     })
     chartRef.current = chart
     priceRangeBoxesRef.current = []
+    onPriceRangeCountChange?.(0)
 
     const candleSeries = chart.addCandlestickSeries({
       upColor: COLORS.candleUp,
@@ -345,6 +366,15 @@ export default function TradeChart({ data, highlightExec, showProfitPct, drawPri
       if (!point) return
 
       if (!dragStartRef.current) {
+        // Not mid-placement: clicking an existing box removes it (direct
+        // manipulation); otherwise this click anchors a new box.
+        const hitIndex = param.point
+          ? priceRangePrimitiveRef.current?.findBoxAt(param.point.x, param.point.y) ?? -1
+          : -1
+        if (hitIndex >= 0) {
+          setPriceRangeBoxes(priceRangeBoxesRef.current.filter((_, i) => i !== hitIndex))
+          return
+        }
         dragStartRef.current = point
         return
       }
@@ -355,8 +385,7 @@ export default function TradeChart({ data, highlightExec, showProfitPct, drawPri
         time2: point.time,
         price2: point.price,
       }
-      priceRangeBoxesRef.current = [...priceRangeBoxesRef.current, box]
-      priceRangePrimitiveRef.current?.setBoxes(priceRangeBoxesRef.current)
+      setPriceRangeBoxes([...priceRangeBoxesRef.current, box])
       dragStartRef.current = null
     }
 
@@ -372,4 +401,6 @@ export default function TradeChart({ data, highlightExec, showProfitPct, drawPri
   }, [drawPriceRange, data])
 
   return <div ref={containerRef} className="w-full h-full" />
-}
+})
+
+export default TradeChart

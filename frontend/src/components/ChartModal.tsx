@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { SelectedExec } from '../types'
-import TradeChart from './TradeChart'
+import TradeChart, { type TradeChartHandle } from './TradeChart'
 import { useChart } from '../hooks/useChart'
 import { useTheme } from '../hooks/useTheme'
 
@@ -42,6 +42,8 @@ export default function ChartModal({
   const { data, loading, error, load } = useChart(sessionId, suffix, PLOT_MODE[mode])
   const [showProfitPct, setShowProfitPct] = useState(false)
   const [drawPriceRange, setDrawPriceRange] = useState(false)
+  const [priceRangeCount, setPriceRangeCount] = useState(0)
+  const chartHandleRef = useRef<TradeChartHandle>(null)
   const { theme } = useTheme()
 
   useEffect(() => {
@@ -124,6 +126,14 @@ export default function ChartModal({
                 Price Range
               </button>
             )}
+            {data && priceRangeCount > 0 && (
+              <button
+                onClick={() => chartHandleRef.current?.clearPriceRanges()}
+                className="px-2 py-1 rounded border border-border text-xs text-slate-400 hover:text-white hover:border-sell transition-colors"
+              >
+                Clear
+              </button>
+            )}
             <button
               onClick={onClose}
               className="text-slate-400 hover:text-white text-xl leading-none px-1"
@@ -151,10 +161,12 @@ export default function ChartModal({
           )}
           {data && (
             <TradeChart
+              ref={chartHandleRef}
               data={data}
               highlightExec={exec}
               showProfitPct={showProfitPct}
               drawPriceRange={drawPriceRange}
+              onPriceRangeCountChange={setPriceRangeCount}
               theme={theme}
             />
           )}
