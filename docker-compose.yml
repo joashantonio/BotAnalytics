@@ -3,10 +3,15 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    ports:
-      - "8000:8000"
+    # Internal-only: reachable by the frontend (nginx proxy_pass http://backend:8000)
+    # but NOT published to the host. To debug from the VM host, temporarily add
+    # a `ports: ["8000:8000"]` block.
+    expose:
+      - "8000"
     environment:
-      - CORS_ORIGINS=http://localhost:3000
+      # DevOps: set to the real public origin(s) of the frontend, comma-separated.
+      # e.g. https://trades.sindbad.tech  — wrong/missing value -> browser CORS block.
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000}
       - DB_PATH=/data/trade_handler.db
     volumes:
       - trade_data:/data

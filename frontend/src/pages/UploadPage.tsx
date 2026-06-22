@@ -9,8 +9,6 @@ interface Props {
   suffix: string
   onSuffixChange: (s: string) => void
   onUpload: (files: File | File[]) => void
-  onClear: () => void
-  onSelectSession: (sessionId: string) => void
   onDeleteSession: (sessionId: string) => void
   onRefresh: () => void
   prefetchStatus: PrefetchStatusResponse | null
@@ -24,8 +22,6 @@ export default function UploadPage({
   suffix,
   onSuffixChange,
   onUpload,
-  onClear,
-  onSelectSession,
   onDeleteSession,
   onRefresh,
   prefetchStatus,
@@ -106,48 +102,38 @@ export default function UploadPage({
       {sessions.length > 0 && (
         <div className="space-y-2">
           <h2 className="text-sm font-semibold text-slate-300 uppercase tracking-wide">Saved Files</h2>
+          <p className="text-xs text-slate-500">
+            Pick the active wallet from the selector in the top bar. Manage your files here.
+          </p>
           <div className="space-y-2">
-            {sessions.map((s) => {
-              const active = session?.session_id === s.session_id
-              return (
-                <div
-                  key={s.session_id}
-                  className={`flex items-center justify-between rounded-lg border px-4 py-3 transition-colors ${
-                    active
-                      ? 'bg-accent/10 border-accent/50'
-                      : 'bg-panel border-border hover:border-accent/30'
-                  }`}
-                >
-                  <button
-                    className="flex-1 text-left min-w-0"
-                    onClick={() => onSelectSession(s.session_id)}
-                  >
-                    <div className="flex items-center gap-2 min-w-0">
-                      {active && (
-                        <span className="shrink-0 w-1.5 h-1.5 rounded-full bg-accent" />
-                      )}
-                      <span className="text-white font-medium text-sm truncate">{s.filename}</span>
-                    </div>
-                    <div className="flex items-center gap-3 mt-0.5 ml-0">
-                      <span className="text-xs text-slate-500">{formatDate(s.uploaded_at)}</span>
-                      <span className="text-xs text-slate-500">{s.trade_count} trades</span>
-                      {s.symbols.length > 0 && (
-                        <span className="text-xs text-slate-500 truncate">
-                          {s.symbols.slice(0, 4).join(', ')}{s.symbols.length > 4 ? ` +${s.symbols.length - 4}` : ''}
-                        </span>
-                      )}
-                    </div>
-                  </button>
-                  <button
-                    onClick={(e) => { e.stopPropagation(); setPendingDelete(s) }}
-                    className="ml-3 shrink-0 text-xs text-slate-500 hover:text-red-400 transition-colors border border-border hover:border-red-700/50 px-2 py-1 rounded"
-                    title="Delete this file"
-                  >
-                    Delete
-                  </button>
+            {sessions.map((s) => (
+              <div
+                key={s.session_id}
+                className="flex items-center justify-between rounded-lg border border-border bg-panel px-4 py-3"
+              >
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="text-white font-medium text-sm truncate">{s.filename}</span>
+                  </div>
+                  <div className="flex items-center gap-3 mt-0.5 ml-0">
+                    <span className="text-xs text-slate-500">{formatDate(s.uploaded_at)}</span>
+                    <span className="text-xs text-slate-500">{s.trade_count} trades</span>
+                    {s.symbols.length > 0 && (
+                      <span className="text-xs text-slate-500 truncate">
+                        {s.symbols.slice(0, 4).join(', ')}{s.symbols.length > 4 ? ` +${s.symbols.length - 4}` : ''}
+                      </span>
+                    )}
+                  </div>
                 </div>
-              )
-            })}
+                <button
+                  onClick={(e) => { e.stopPropagation(); setPendingDelete(s) }}
+                  className="ml-3 shrink-0 text-xs text-slate-500 hover:text-red-400 transition-colors border border-border hover:border-red-700/50 px-2 py-1 rounded"
+                  title="Delete this file"
+                >
+                  Delete
+                </button>
+              </div>
+            ))}
           </div>
         </div>
       )}
@@ -183,17 +169,9 @@ export default function UploadPage({
 
       {session && (
         <div className="bg-panel border border-border rounded-xl p-6 space-y-4">
-          <div className="flex items-start justify-between">
-            <div>
-              <p className="text-white font-semibold">{session.filename}</p>
-              <p className="text-slate-400 text-sm mt-0.5">Active session</p>
-            </div>
-            <button
-              onClick={onClear}
-              className="text-xs text-slate-500 hover:text-slate-300 transition-colors border border-border px-2 py-1 rounded"
-            >
-              Deselect
-            </button>
+          <div>
+            <p className="text-white font-semibold">{session.filename}</p>
+            <p className="text-slate-400 text-sm mt-0.5">Last uploaded</p>
           </div>
           <div className="grid grid-cols-3 gap-3 text-center">
             {[
