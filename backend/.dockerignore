@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local SQLite DB (persisted via Docker volume at runtime, not baked into image)
+*.db
+*.sqlite
+*.sqlite3
+trade_handler.db
+trade_handler.db-wal
+trade_handler.db-shm
+
+# Secrets / env
+.env
+.env.*
+!.env.example
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

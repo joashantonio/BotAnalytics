@@ -62,6 +62,9 @@ body {
    (bg-buy, text-accent, …) are intentionally left alone. */
 .bg-surface { background-color: var(--app-bg) !important; }
 .bg-panel { background-color: var(--app-panel) !important; }
+/* Zebra-stripe variant — same remap, scoped to odd rows. Raw Tailwind would
+   otherwise resolve `odd:bg-surface` to the near-black token in light mode. */
+.odd\:bg-surface:nth-child(odd) { background-color: var(--app-bg) !important; }
 
 /* Hover lift — raw Tailwind hover:bg-* tokens are near-black, jarring in light
    mode. Re-point at the theme-aware hover token. */

@@ -66,7 +66,7 @@ export default function App() {
 
   return (
     <div className="flex flex-col h-screen overflow-hidden">
-      <Navbar />
+      <Navbar sessions={sessions} session={session} onSelectSession={selectSession} />
       <main className="flex-1 overflow-hidden">
         <Routes>
           <Route path="/dashboard" element={<DashboardPage suffix={suffix} />} />
@@ -81,8 +81,6 @@ export default function App() {
                 suffix={suffix}
                 onSuffixChange={setSuffix}
                 onUpload={upload}
-                onClear={clear}
-                onSelectSession={selectSession}
                 onDeleteSession={handleDeleteSession}
                 onRefresh={fetchSessions}
                 prefetchStatus={prefetchStatus}

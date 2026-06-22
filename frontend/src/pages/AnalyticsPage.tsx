@@ -14,9 +14,20 @@ const CE_BOT_KEY = 'th:ce:botType'
 
 type SortKey = 'date' | 'symbol' | 'botType' | 'trade' | 'side' | 'price' | 'qty' | 'quartile' | 'result'
 
-type CeMode = 'psar' | 'bearsbot' | 'ma10' | 'ma200'
+type CeMode = 'all' | 'psar' | 'bearsbot' | 'ma10' | 'ma200'
 const isCeMode = (v: string | null): v is CeMode =>
-  v === 'psar' || v === 'bearsbot' || v === 'ma10' || v === 'ma200'
+  v === 'all' || v === 'psar' || v === 'bearsbot' || v === 'ma10' || v === 'ma200'
+
+// Backend indicator mode that scores a given bot family. Maard→psar,
+// Bears Bot→ma200, Bears Bot Booster→ma10. Returns null for unknown bots.
+type BackendMode = 'psar' | 'ma10' | 'ma200'
+const modeForBot = (raw: string): BackendMode | null => {
+  const bt = (raw || '').toLowerCase()
+  if (bt.includes('maard')) return 'psar'
+  if (bt.includes('booster')) return 'ma10'
+  if (bt.includes('bears bot')) return 'ma200'
+  return null
+}
 
 interface Props {
   session: UploadResponse | null
@@ -39,7 +50,7 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
   // Maard Bot=PSAR, Bears Bot=MA200, Bears Bot Booster=MA10.
   const [ceMode, setCeMode] = useState<CeMode>(() => {
     const saved = lsGet(CE_BOT_KEY)
-    return isCeMode(saved) ? saved : 'psar'
+    return isCeMode(saved) ? saved : 'all'
   })
   // Backend correctness/chart mode — 'bearsbot' has no mode of its own; it
   // scores and plots against MA200.
@@ -55,10 +66,13 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
   const EXEC_PAGE_SIZE = 10
 
   // Execution chart modal — opened by clicking a row in the executions table.
+  // `mode` is the indicator to plot: normally the active filter, but in "All"
+  // mode it's derived per-row from the execution's own bot type.
   const [chartModal, setChartModal] = useState<{
     symbol: string
     tradeId: string
     exec: SelectedExec
+    mode: CeMode
   } | null>(null)
 
   // back to first page whenever the filter or the underlying data changes
@@ -66,8 +80,8 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
     setExecPage(0)
   }, [execFilter, sideFilter, sortKey, sortDir, ce])
 
-  const openChart = (symbol: string, tradeId: string, exec: SelectedExec) => {
-    setChartModal({ symbol, tradeId, exec })
+  const openChart = (symbol: string, tradeId: string, exec: SelectedExec, mode: CeMode) => {
+    setChartModal({ symbol, tradeId, exec, mode })
   }
 
   // Clear stale results whenever the inputs that define them change (wallet,
@@ -93,17 +107,40 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
   // auto-compute whenever the session, suffix, indicator mode, or date range changes
   useEffect(() => {
     if (!session) return
+    const sid = session.session_id
     let cancelled = false
     setCeLoading(true)
     setCeError(null)
-    api
-      .getCorrectExecutions(
-        session.session_id,
-        suffix,
-        fromDate || undefined,
-        toDate || undefined,
-        fetchMode,
-      )
+
+    const fetchOne = (mode: BackendMode) =>
+      api.getCorrectExecutions(sid, suffix, fromDate || undefined, toDate || undefined, mode)
+
+    // "All" = score every bot against its own indicator: fetch all three
+    // modes, then from each keep only the executions that mode actually owns
+    // (Maard rows from psar, Bears from ma200, Booster from ma10) and merge.
+    // A single-mode call would mis-score the bots it doesn't own.
+    const work: Promise<CorrectExecutions> =
+      ceMode === 'all'
+        ? Promise.all([fetchOne('psar'), fetchOne('ma10'), fetchOne('ma200')]).then(
+            ([psar, ma10, ma200]) => {
+              const ownedBy = (mode: BackendMode, data: CorrectExecutions) =>
+                (data.executions ?? []).filter((e) => modeForBot(e.bot_type) === mode)
+              const executions = [
+                ...ownedBy('psar', psar),
+                ...ownedBy('ma10', ma10),
+                ...ownedBy('ma200', ma200),
+              ]
+              const skipped_symbols = [
+                ...new Set([...psar.skipped_symbols, ...ma10.skipped_symbols, ...ma200.skipped_symbols]),
+              ]
+              // Top-level totals are unused — the render recomputes every stat
+              // from `executions`. Only executions + skipped_symbols matter here.
+              return { ...psar, executions, skipped_symbols }
+            },
+          )
+        : fetchOne(fetchMode as BackendMode)
+
+    work
       .then((data) => {
         if (!cancelled) setCe(data)
       })
@@ -118,7 +155,7 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
     return () => {
       cancelled = true
     }
-  }, [session, suffix, fetchMode, fromDate, toDate])
+  }, [session, suffix, ceMode, fetchMode, fromDate, toDate])
 
   if (!session) {
     return (
@@ -156,7 +193,10 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
           <h2 className="text-lg font-semibold text-white">Executions</h2>
         </div>
         <p className="text-xs text-slate-400 mb-5">
-          {ceMode === 'psar' ? (
+          {ceMode === 'all' ? (
+            <>Every bot is scored against its own indicator — Maard Bot by PSAR, Bears Bot by
+            MA200, Bears Bot Booster by MA10.</>
+          ) : ceMode === 'psar' ? (
             <>A buy is “correct” when its execution date falls in a Maard Bot downtrend; a sell when
             it falls in an uptrend.</>
           ) : ceMode === 'bearsbot' ? (
@@ -172,17 +212,27 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
           {' '}Optionally restrict to executions within a date range.
         </p>
 
-        <div className="bg-surface/60 border border-border rounded-lg px-3 py-2.5 mb-5 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs">
+        <div className="bg-surface border border-border rounded-lg px-3 py-2.5 mb-5 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs">
           <span className="font-medium text-slate-400 uppercase tracking-wide">Filters</span>
           <div className="flex items-center gap-2">
             <span className="text-slate-500">Bot</span>
             <div className="flex rounded border border-border overflow-hidden">
               <button
-                onClick={() => setCeMode('psar')}
+                onClick={() => setCeMode('all')}
                 className={`px-2.5 py-1 transition-colors ${
+                  ceMode === 'all'
+                    ? 'bg-accent/20 text-accent font-medium'
+                    : 'bg-panel text-slate-400 hover:text-white hover:bg-panel'
+                }`}
+              >
+                All
+              </button>
+              <button
+                onClick={() => setCeMode('psar')}
+                className={`px-2.5 py-1 transition-colors border-l border-border ${
                   ceMode === 'psar'
                     ? 'bg-accent/20 text-accent font-medium'
-                    : 'bg-surface text-slate-400 hover:text-white'
+                    : 'bg-panel text-slate-400 hover:text-white hover:bg-panel'
                 }`}
               >
                 Maard Bot
@@ -192,7 +242,7 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
                 className={`px-2.5 py-1 transition-colors border-l border-border ${
                   ceMode === 'bearsbot'
                     ? 'bg-accent/20 text-accent font-medium'
-                    : 'bg-surface text-slate-400 hover:text-white'
+                    : 'bg-panel text-slate-400 hover:text-white hover:bg-panel'
                 }`}
               >
                 Bears Bot
@@ -202,7 +252,7 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
                 className={`px-2.5 py-1 transition-colors border-l border-border ${
                   ceMode === 'ma10'
                     ? 'bg-accent/20 text-accent font-medium'
-                    : 'bg-surface text-slate-400 hover:text-white'
+                    : 'bg-panel text-slate-400 hover:text-white hover:bg-panel'
                 }`}
               >
                 Bears Bot Booster
@@ -216,7 +266,7 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
               value={fromDate}
               max={toDate || undefined}
               onChange={(e) => setFromDate(e.target.value)}
-              className="bg-surface border border-border rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-accent"
+              className="bg-panel border border-border rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-accent"
             />
             <span className="text-slate-600">→</span>
             <input
@@ -224,7 +274,7 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
               value={toDate}
               min={fromDate || undefined}
               onChange={(e) => setToDate(e.target.value)}
-              className="bg-surface border border-border rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-accent"
+              className="bg-panel border border-border rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-accent"
             />
           </div>
           {(fromDate || toDate) && (
@@ -257,6 +307,7 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
           // would still show non-zero Maard stats borrowed from its other bots.
           const botMatches = (raw: string) => {
             const bt = (raw || '').toLowerCase()
+            if (ceMode === 'all') return true  // rows already scored per-bot at fetch
             if (ceMode === 'psar') return bt.includes('maard')
             if (ceMode === 'bearsbot') return bt.includes('bears bot') && !bt.includes('booster')
             if (ceMode === 'ma10') return bt.includes('booster')
@@ -519,7 +570,7 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
                   <div className="overflow-x-auto rounded-lg border border-border">
                     <table className="w-full text-sm">
                       <thead>
-                        <tr className="text-slate-400 bg-surface/60 border-b border-border">
+                        <tr className="text-slate-400 bg-surface border-b border-border">
                           <th
                             onClick={() => toggleSort('date')}
                             className={`text-left py-2 px-4 cursor-pointer select-none whitespace-nowrap transition-colors ${thSort('date')}`}
@@ -581,13 +632,18 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
                           <tr
                             key={`${e.trade_id}_${e.symbol}_${e.side}_${e.exec_date}_${start + i}`}
                             onClick={() =>
-                              openChart(e.symbol, e.trade_id, {
-                                date: e.exec_date,
-                                side: e.side,
-                                price: e.exec_price,
-                              })
+                              openChart(
+                                e.symbol,
+                                e.trade_id,
+                                {
+                                  date: e.exec_date,
+                                  side: e.side,
+                                  price: e.exec_price,
+                                },
+                                ceMode === 'all' ? (modeForBot(e.bot_type) ?? 'psar') : ceMode,
+                              )
                             }
-                            className="border-b border-border/50 odd:bg-surface/20 hover:bg-accent/10 cursor-pointer transition-colors"
+                            className="border-b border-border/50 odd:bg-surface hover:bg-accent/10 cursor-pointer transition-colors"
                           >
                             <td className="py-2 px-4 text-slate-300 whitespace-nowrap">{e.exec_date}</td>
                             <td className="py-2 pr-4 font-mono font-medium text-white">{e.symbol}</td>
@@ -668,7 +724,7 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
             })()}
             {total_executions === 0 && (
               <p className="text-slate-500 text-sm">
-                No {ceMode === 'psar' ? 'Maard Bot' : ceMode === 'bearsbot' ? 'Bears Bot' : ceMode === 'ma10' ? 'Bears Bot Booster' : 'MA200'} executions in the selected range.
+                No {ceMode === 'all' ? '' : ceMode === 'psar' ? 'Maard Bot ' : ceMode === 'bearsbot' ? 'Bears Bot ' : ceMode === 'ma10' ? 'Bears Bot Booster ' : 'MA200 '}executions in the selected range.
               </p>
             )}
             {ce.skipped_symbols.length > 0 && (
@@ -694,7 +750,7 @@ export default function AnalyticsPage({ session, suffix, analytics, loading, err
         symbol={chartModal.symbol}
         tradeId={chartModal.tradeId}
         exec={chartModal.exec}
-        mode={ceMode}
+        mode={chartModal.mode === 'all' ? 'psar' : chartModal.mode}
         onClose={() => setChartModal(null)}
       />
     )}
