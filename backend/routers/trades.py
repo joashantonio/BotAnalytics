@@ -1,16 +1,31 @@
+import logging
+import os
 import uuid
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, UploadFile, File, Query
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, UploadFile, File, Query
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
 from ..services.trade_parser import parse_trades
 from ..store import create_session, get_session, list_sessions, delete_session
 from ..cache import invalidate_charts_for_session, invalidate_analytics_for_session
 from ..prefetch import prefetch_session, get_prefetch_status
 
+logger = logging.getLogger(__name__)
+limiter = Limiter(key_func=get_remote_address)
+
 router = APIRouter(prefix="/trades", tags=["trades"])
 
+# Reject uploads larger than this. Mirrors nginx client_max_body_size (25m) so
+# the backend never buffers an oversized file fully into RAM. Overridable.
+_MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(25 * 1024 * 1024)))
+# Stream the upload in chunks so we can abort before reading the whole body.
+_CHUNK = 1024 * 1024
+
 @router.post("/upload")
+@limiter.limit("10/minute")
 async def upload_trades(
+    request: Request,
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     suffix: str = Query(".SR", description="Exchange suffix for prefetch"),
@@ -18,17 +33,38 @@ async def upload_trades(
     if not file.filename or not file.filename.lower().endswith((".csv", ".xlsx", ".xlsm")):
         raise HTTPException(status_code=400, detail="Only CSV or XLSX files are supported")
 
-    content = await file.read()
+    # Read in chunks and bail the moment we exceed the cap, instead of buffering
+    # an arbitrarily large body into memory (OOM / DoS guard).
+    chunks: list[bytes] = []
+    size = 0
+    while chunk := await file.read(_CHUNK):
+        size += len(chunk)
+        if size > _MAX_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File exceeds {_MAX_UPLOAD_BYTES // (1024 * 1024)} MB limit",
+            )
+        chunks.append(chunk)
+    content = b"".join(chunks)
+
     try:
         trades = parse_trades(content, source_name=file.filename)
     except ValueError as e:
+        logger.info("Upload rejected (parse error) file=%s: %s", file.filename, e)
         raise HTTPException(status_code=422, detail=str(e))
+    except Exception:
+        logger.exception("Upload failed (unexpected parse error) file=%s", file.filename)
+        raise HTTPException(status_code=422, detail="Could not parse file")
 
     session_id = str(uuid.uuid4())
     symbols = sorted({sym for (_, sym) in trades.keys()})
     create_session(session_id, trades, file.filename, csv_bytes=content, symbols=symbols)
 
     background_tasks.add_task(prefetch_session, session_id, trades, suffix)
+    logger.info(
+        "Session created id=%s file=%s trades=%d symbols=%d",
+        session_id, file.filename, len(trades), len(symbols),
+    )
 
     completed = sum(1 for t in trades.values() if t["status"] == "completed")
     ongoing = sum(1 for t in trades.values() if t["status"] == "ongoing")

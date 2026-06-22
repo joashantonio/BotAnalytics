@@ -171,3 +171,13 @@ def set_ohlcv(ticker: str, from_date: str, to_date: str, data: str) -> None:
             """,
             (ticker, from_date, to_date, data),
         )
+
+
+def del_ohlcv(ticker: str, from_date: str, to_date: str) -> None:
+    """Evict one OHLCV window — used to drop a fetch that failed validation
+    (yfinance intermittently returns a wrong-instrument price scale)."""
+    with _conn() as c:
+        c.execute(
+            "DELETE FROM ohlcv_cache WHERE ticker=? AND from_date=? AND to_date=?",
+            (ticker, from_date, to_date),
+        )

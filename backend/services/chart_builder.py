@@ -22,6 +22,18 @@ def _order_exec_date(order: dict) -> pd.Timestamp:
         return pd.Timestamp(d.date())
     return pd.Timestamp(d)
 
+def _ref_points_from_orders(orders) -> list[tuple[str, float]]:
+    """(exec_date, exec_price) pairs — ground truth from the CSV used to validate
+    that each fetched candle straddles its execution (yfinance can return a
+    wrong / mis-adjusted price scale for a ticker). Empty if no priced order."""
+    pts = []
+    for o in orders:
+        ep = o.get("exec_price")
+        if ep is None:
+            continue
+        pts.append((_order_exec_date(o).strftime("%Y-%m-%d"), float(ep)))
+    return pts
+
 def _last_exec_index_in_block(
     orders, df_wide: "pd.DataFrame", bs_w: int, be_w: int, start_i: int
 ) -> int | None:
@@ -135,7 +147,9 @@ def build_chart_data(
     exit_date = trade_info.get("exit_date") or pd.Timestamp.today().strftime("%Y-%m-%d")
     status = trade_info["status"]
 
-    df_wide = _df_wide_override if _df_wide_override is not None else fetch_wide(ticker, entry_date, exit_date)
+    df_wide = _df_wide_override if _df_wide_override is not None else fetch_wide(
+        ticker, entry_date, exit_date, ref_points=_ref_points_from_orders(orders)
+    )
     highs_w = df_wide["High"].values.astype(float)
     lows_w = df_wide["Low"].values.astype(float)
     sar_w, trend_w = compute_psar(highs_w, lows_w)
@@ -354,7 +368,9 @@ def build_chart_data_ma10(
     exit_date = trade_info.get("exit_date") or pd.Timestamp.today().strftime("%Y-%m-%d")
     status = trade_info["status"]
 
-    df_wide = _df_wide_override if _df_wide_override is not None else fetch_wide(ticker, entry_date, exit_date)
+    df_wide = _df_wide_override if _df_wide_override is not None else fetch_wide(
+        ticker, entry_date, exit_date, ref_points=_ref_points_from_orders(orders)
+    )
     closes_w = df_wide["Close"].values.astype(float)
     ma_w = ma10_mod.compute_ma10(closes_w)
     trend_w = ma10_mod.compute_trend(closes_w, ma_w)
@@ -664,8 +680,9 @@ def _fetch_ma200_resolved(
     # until every order's block starts on a bar with a defined MA200 (a real
     # crossover) or the cap is hit.
     lookback = ma200_mod.LOOKBACK_DAYS
+    ref_points = _ref_points_from_orders(orders)
     while True:
-        df_wide = fetch_wide(ticker, entry_date, exit_date, lookback_days=lookback)
+        df_wide = fetch_wide(ticker, entry_date, exit_date, lookback_days=lookback, ref_points=ref_points)
         closes_w = df_wide["Close"].values.astype(float)
         ma_w = ma200_mod.compute_ma200(closes_w)
         trend_w = ma200_mod.compute_trend(closes_w, ma_w)

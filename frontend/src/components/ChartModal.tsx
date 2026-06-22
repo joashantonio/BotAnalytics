@@ -63,11 +63,12 @@ export default function ChartModal({
       onClick={onClose}
     >
       <div
-        className="bg-surface border border-border rounded-lg shadow-xl w-full max-w-5xl h-[80vh] flex flex-col overflow-hidden"
+        className="bg-surface border border-border rounded-lg shadow-xl w-full max-w-7xl h-[80vh] flex flex-col overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
         {/* header */}
-        <div className="px-4 py-2 border-b border-border bg-panel shrink-0 flex items-center gap-4 flex-wrap">
+        <div className="px-4 py-2 border-b border-border bg-panel shrink-0 flex items-start gap-4">
+          <div className="flex items-center gap-x-4 gap-y-1 flex-wrap min-w-0 flex-1">
           {data ? (
             <>
               <span className="font-bold text-white">{data.company_name}</span>
@@ -101,7 +102,8 @@ export default function ChartModal({
               {symbol} · Trade {tradeId}
             </span>
           )}
-          <div className="ml-auto flex items-center gap-3 shrink-0">
+          </div>
+          <div className="flex items-center gap-3 shrink-0">
             {data && (
               <button
                 onClick={() => setShowProfitPct((v) => !v)}

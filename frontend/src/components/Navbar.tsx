@@ -30,7 +30,7 @@ export default function Navbar({ sessions, session, onSelectSession }: Props) {
     <nav className="h-12 border-b border-border bg-panel flex items-center gap-3 px-4 shrink-0">
       <div className="flex items-center gap-1">
         {link('/dashboard', 'Dashboard')}
-        {link('/', 'Upload')}
+        {link('/upload', 'Upload')}
         {link('/trades', 'Trades')}
         {link('/chart', 'Chart')}
         {link('/analytics', 'Analytics')}
@@ -39,7 +39,7 @@ export default function Navbar({ sessions, session, onSelectSession }: Props) {
       {/* Wallet picker — only on the per-wallet pages. Upload manages files;
           Dashboard aggregates across all wallets and has its own filter.
           Pinned to the right, just before the theme switch. */}
-      {pathname !== '/' && pathname !== '/dashboard' && (
+      {pathname !== '/upload' && pathname !== '/dashboard' && (
         <WalletSelector sessions={sessions} session={session} onSelect={onSelectSession} />
       )}
       <button

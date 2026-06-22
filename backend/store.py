@@ -4,17 +4,41 @@ Stores parsed trades in-memory for fast access; CSV bytes and metadata on disk.
 DB path: backend/trade_handler.db (relative to store.py location)
 """
 import json
+import logging
 import os
 import sqlite3
+from collections import OrderedDict
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 # DB location is overridable via DB_PATH so a Docker volume can persist it
 # outside the container layer. Defaults to backend/trade_handler.db for local dev.
 _DB_PATH = Path(os.getenv("DB_PATH", str(Path(__file__).parent / "trade_handler.db")))
 _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-_sessions: dict[str, dict[str, Any]] = {}
+
+# Bounded in-memory LRU of parsed trades. Evicting only drops the RAM copy —
+# the session still lives in SQLite (csv_bytes) and is re-parsed on next access,
+# so this caps memory without losing data. Override via SESSION_CACHE_MAX.
+_SESSION_CACHE_MAX = int(os.getenv("SESSION_CACHE_MAX", "32"))
+_sessions: "OrderedDict[str, dict[str, Any]]" = OrderedDict()
+
+
+def _cache_put(session_id: str, value: dict[str, Any]) -> None:
+    _sessions[session_id] = value
+    _sessions.move_to_end(session_id)
+    while len(_sessions) > _SESSION_CACHE_MAX:
+        evicted, _ = _sessions.popitem(last=False)
+        logger.debug("Evicted session from memory cache id=%s", evicted)
+
+
+def _cache_get(session_id: str) -> dict[str, Any] | None:
+    val = _sessions.get(session_id)
+    if val is not None:
+        _sessions.move_to_end(session_id)
+    return val
 
 
 @contextmanager
@@ -54,7 +78,7 @@ def create_session(
     csv_bytes: bytes,
     symbols: list[str],
 ) -> None:
-    _sessions[session_id] = {"trades": trades, "filename": filename}
+    _cache_put(session_id, {"trades": trades, "filename": filename})
     with _get_conn() as conn:
         conn.execute(
             """
@@ -67,9 +91,10 @@ def create_session(
 
 
 def get_session(session_id: str) -> dict | None:
-    if session_id in _sessions:
-        return _sessions[session_id]
-    # Restore from DB on cache miss (e.g., after restart)
+    cached = _cache_get(session_id)
+    if cached is not None:
+        return cached
+    # Restore from DB on cache miss (e.g., after restart or LRU eviction)
     with _get_conn() as conn:
         row = conn.execute(
             "SELECT csv_bytes, filename FROM sessions WHERE session_id = ?",
@@ -81,9 +106,11 @@ def get_session(session_id: str) -> dict | None:
     try:
         trades = parse_trades(row["csv_bytes"], source_name=row["filename"])
     except Exception:
+        logger.exception("Failed to re-parse session from DB id=%s", session_id)
         return None
-    _sessions[session_id] = {"trades": trades, "filename": row["filename"]}
-    return _sessions[session_id]
+    value = {"trades": trades, "filename": row["filename"]}
+    _cache_put(session_id, value)
+    return value
 
 
 def list_sessions() -> list[dict]:
