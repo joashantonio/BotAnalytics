@@ -1,3 +1,6 @@
+import hashlib
+import json
+
 import pandas as pd
 from fastapi import APIRouter, HTTPException, Query
 
@@ -136,6 +139,25 @@ async def get_chart_endpoint(
     if from_date and to_date and from_date > to_date:
         raise HTTPException(status_code=422, detail="from_date must be on or before to_date")
 
+    # Hash the order fields that drive candle/marker output (side, qty, price,
+    # exec date) so the cache auto-busts when a re-parse of the same trade yields
+    # different buy/sell data. Without this, a stale chart_cache row (persisted in
+    # the shared SQLite/WAL volume across restarts and logic changes) keeps being
+    # served with the wrong buy/sell markers even after the source data changes.
+    trade_info = trades[key]
+    order_fingerprint = [
+        (
+            o.get("side"),
+            o.get("qty"),
+            o.get("exec_price"),
+            str(o.get("exec_date")),
+        )
+        for o in trade_info["orders"]
+    ]
+    orders_hash = hashlib.sha1(
+        json.dumps(order_fingerprint, sort_keys=True, default=str).encode()
+    ).hexdigest()[:12]
+
     range_part = f"::{from_date or ''}:{to_date or ''}" if (from_date or to_date) else ""
     # Every chart now extends through today's latest candle (see fetch_wide), so
     # the cached payload must be rebuilt once per day for every trade — otherwise
@@ -144,7 +166,7 @@ async def get_chart_endpoint(
     # Always version the key (incl. PSAR). Previously PSAR with no range cached
     # under a bare suffix with no version, so payload-shape changes (e.g. adding
     # bot_type) were never cache-busted and stale-shaped rows kept being served.
-    cache_suffix = f"{suffix}::{mode}::v24{range_part}{today_part}"
+    cache_suffix = f"{suffix}::{mode}::v24::{orders_hash}{range_part}{today_part}"
 
     cached = get_chart(session_id, trade_id, symbol, cache_suffix)
     if cached is not None:

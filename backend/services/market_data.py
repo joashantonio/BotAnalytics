@@ -1,8 +1,16 @@
 import json
+import logging
+import os
 from datetime import timedelta
 
 import pandas as pd
 import yfinance as yf
+
+logger = logging.getLogger(__name__)
+
+# Cap the yfinance HTTP fetch so a slow/unresponsive upstream can't hang a
+# worker indefinitely (these run in a thread-pool executor off the event loop).
+_YF_TIMEOUT = int(os.getenv("YF_TIMEOUT", "20"))
 
 _OHLCV_COLS = ["Open", "High", "Low", "Close", "Volume"]
 
@@ -55,6 +63,7 @@ def _download_ohlcv(ticker: str, from_date: str, to_date: str) -> pd.DataFrame:
     df = yf.download(
         ticker, start=from_date, end=to_date,
         interval="1d", auto_adjust=False, progress=False,
+        timeout=_YF_TIMEOUT,
     )
     if df.empty:
         raise ValueError(f"No market data for {ticker!r}")
@@ -70,19 +79,86 @@ def _download_ohlcv(ticker: str, from_date: str, to_date: str) -> pd.DataFrame:
         last_real -= 1
     return df.iloc[: last_real + 1]
 
-def fetch_ohlcv(ticker: str, from_date: str, to_date: str) -> pd.DataFrame:
+# yfinance intermittently returns wrong / inconsistently-adjusted prices for a
+# Tadawul ticker:
+#   4180.SR  came back ~95 and ~32 when its real price is ~2.4
+#   2190.SR  came back ~93 when its real price is ~33
+#   4050.SR  came back as a SINGLE window mixing a ~122 segment and a ~57
+#            segment (split-adjustment artifact) when executions are ~50
+# The bad response gets cached and the chart shows wrong-scale candles forever.
+#
+# Validation: the candle ON each execution date must straddle that execution's
+# price (every real fill happened between that day's low and high). This is the
+# tightest possible check — it catches uniform wrong-scale AND mixed-scale
+# windows that a single global low–high band swallows (4050.SR's 122-high
+# segment widened the band enough to accept a 50 exec). A small pad absorbs
+# rounding and pre/post-market fills just outside the regular-session range.
+EXEC_BAND_PAD = 0.10  # accept exec within [day_low*(1-pad), day_high*(1+pad)]
+
+
+def _execs_match_candles(df: pd.DataFrame, ref_points: "list[tuple[str, float]] | None") -> bool:
+    """True if each (exec_date, exec_price) sits within that date's candle.
+
+    Only dates present in the fetched data are checked (an exec on a day with
+    no candle — holiday, pre-listing — is skipped, not a failure). If NONE of
+    the exec dates are present, fall back to accepting (can't validate)."""
+    if not ref_points or df.empty or "Low" not in df.columns or "High" not in df.columns:
+        return True
+    # Map date-string -> (low, high) for O(1) lookup.
+    idx = [d.strftime("%Y-%m-%d") for d in df.index]
+    lows = df["Low"].values.astype(float)
+    highs = df["High"].values.astype(float)
+    band = {idx[i]: (float(lows[i]), float(highs[i])) for i in range(len(idx))}
+
+    checked = 0
+    for date_str, price in ref_points:
+        if price is None or price <= 0:
+            continue
+        lh = band.get(date_str)
+        if lh is None:
+            continue  # no candle that day -> can't check this exec
+        lo, hi = lh
+        if lo <= 0 or hi <= 0:
+            continue
+        checked += 1
+        if not (lo * (1.0 - EXEC_BAND_PAD) <= price <= hi * (1.0 + EXEC_BAND_PAD)):
+            return False  # this fill couldn't have happened in this candle
+    return True  # all checkable execs matched (or none were checkable)
+
+
+def fetch_ohlcv(
+    ticker: str,
+    from_date: str,
+    to_date: str,
+    ref_points: "list[tuple[str, float]] | None" = None,
+) -> pd.DataFrame:
     # If to_date is in the future, clamp it to tomorrow (today + 1 day) so we don't cache future dates
     # and ensure today's candle is always included since yfinance download end is exclusive.
     tomorrow_str = (pd.Timestamp.today() + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
     if to_date > tomorrow_str:
         to_date = tomorrow_str
 
-    from ..cache import get_ohlcv, set_ohlcv
+    from ..cache import get_ohlcv, set_ohlcv, del_ohlcv
+
     cached = get_ohlcv(ticker, from_date, to_date)
     if cached is not None:
-        return _drop_market_breaks(_json_to_df(cached))
+        df_cached = _json_to_df(cached)
+        if _execs_match_candles(df_cached, ref_points):
+            return _drop_market_breaks(df_cached)
+        # Cached row is wrong-scale (stale bad yfinance response) -> evict + refetch.
+        del_ohlcv(ticker, from_date, to_date)
 
     df = _download_ohlcv(ticker, from_date, to_date)
+    if not _execs_match_candles(df, ref_points):
+        # One retry: transient wrong/mis-adjusted response from yfinance.
+        df = _download_ohlcv(ticker, from_date, to_date)
+        if not _execs_match_candles(df, ref_points):
+            logger.warning("Execution-band validation failed for %s after retry", ticker)
+            raise ValueError(
+                f"Market data for {ticker!r} failed execution-band validation "
+                f"(an execution price fell outside its day's candle); "
+                f"refusing to chart wrong-scale candles"
+            )
     set_ohlcv(ticker, from_date, to_date, _df_to_json(df))
     return _drop_market_breaks(df)
 
@@ -95,15 +171,22 @@ def get_company_name(ticker: str) -> str:
         info = yf.Ticker(ticker).info
         name = info.get("longName") or info.get("shortName") or ticker
     except Exception:
+        logger.warning("Failed to fetch company name for %s; falling back to ticker", ticker)
         name = ticker
     set_company_name_cached(ticker, name)
     return name
 
-def fetch_wide(ticker: str, entry_date: str, exit_date: str, lookback_days: int = 120) -> pd.DataFrame:
+def fetch_wide(
+    ticker: str,
+    entry_date: str,
+    exit_date: str,
+    lookback_days: int = 120,
+    ref_points: "list[tuple[str, float]] | None" = None,
+) -> pd.DataFrame:
     wide_from = (pd.Timestamp(entry_date) - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
     # Always extend the window through today so charts for trades that exited
     # long ago still display the latest available candles, not just data up to
     # their exit date.
     wide_to_exit = pd.Timestamp(exit_date) + timedelta(days=lookback_days)
     wide_to = max(wide_to_exit, pd.Timestamp.today()).strftime("%Y-%m-%d")
-    return fetch_ohlcv(ticker, wide_from, wide_to)
+    return fetch_ohlcv(ticker, wide_from, wide_to, ref_points=ref_points)

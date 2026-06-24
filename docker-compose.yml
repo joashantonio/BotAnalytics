@@ -13,9 +13,21 @@ services:
       # e.g. https://trades.sindbad.tech  — wrong/missing value -> browser CORS block.
       - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000}
       - DB_PATH=/data/trade_handler.db
+      - WEB_CONCURRENCY=${WEB_CONCURRENCY:-2}
     volumes:
       - trade_data:/data
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.5"
+          memory: 1g
 
   frontend:
     build:
@@ -24,8 +36,20 @@ services:
     ports:
       - "3000:80"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256m
 
 volumes:
   trade_data:

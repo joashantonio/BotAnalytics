@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { Routes, Route } from 'react-router-dom'
+import { Routes, Route, Navigate } from 'react-router-dom'
 import Navbar from './components/Navbar'
 import UploadPage from './pages/UploadPage'
 import DashboardPage from './pages/DashboardPage'
@@ -69,9 +69,10 @@ export default function App() {
       <Navbar sessions={sessions} session={session} onSelectSession={selectSession} />
       <main className="flex-1 overflow-hidden">
         <Routes>
+          <Route path="/" element={<Navigate to="/dashboard" replace />} />
           <Route path="/dashboard" element={<DashboardPage suffix={suffix} />} />
           <Route
-            path="/"
+            path="/upload"
             element={
               <UploadPage
                 uploading={uploading}

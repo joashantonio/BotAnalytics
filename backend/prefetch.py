@@ -8,12 +8,15 @@ under that symbol. Reduces yfinance calls from N_trades to N_symbols.
 Status tracked in-memory per session for frontend polling.
 """
 import asyncio
+import logging
 import time
 from collections import defaultdict
 from datetime import timedelta
 from typing import TypedDict
 
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 from .cache import get_chart, set_chart, set_analytics, SESSION_SCOPE
 from .services.chart_builder import build_chart_data, build_analytics
@@ -108,6 +111,7 @@ async def prefetch_session(session_id: str, trades: dict, suffix: str) -> None:
                 None, fetch_ohlcv, ticker, wide_from, wide_to
             )
         except Exception:
+            logger.warning("Prefetch fetch failed ticker=%s (%d trades)", ticker, len(group))
             failed_count += len(group)
             _set_status(session_id, total, cached_count, failed_count, done=False)
             await asyncio.sleep(0.3)
@@ -127,6 +131,7 @@ async def prefetch_session(session_id: str, trades: dict, suffix: str) -> None:
                 set_chart(session_id, tid, sym_key, suffix, data)
                 cached_count += 1
             except Exception:
+                logger.warning("Chart build failed trade=%s symbol=%s", tid, sym_key)
                 failed_count += 1
             _set_status(session_id, total, cached_count, failed_count, done=False)
 
@@ -138,7 +143,7 @@ async def prefetch_session(session_id: str, trades: dict, suffix: str) -> None:
         analytics = await loop.run_in_executor(None, build_analytics, trades, suffix)
         set_analytics(session_id, SESSION_SCOPE, suffix, analytics)
     except Exception:
-        pass
+        logger.warning("Session analytics pre-cache failed id=%s", session_id)
 
     # Fetch phase complete. Now run the integrity pass: recompute every chart
     # from the stored OHLCV and overwrite the cache if it diverges. This catches
@@ -158,6 +163,7 @@ async def prefetch_session(session_id: str, trades: dict, suffix: str) -> None:
             try:
                 fresh = await loop.run_in_executor(None, _build_one, info, suffix, df_wide)
             except Exception:
+                logger.warning("Integrity recompute failed trade=%s symbol=%s", tid, sym_key)
                 verified += 1
                 _set_status(session_id, total, cached_count, failed_count,
                             done=False, verified=verified, repaired=repaired, verifying=True)
@@ -174,10 +180,14 @@ async def prefetch_session(session_id: str, trades: dict, suffix: str) -> None:
         analytics = await loop.run_in_executor(None, build_analytics, trades, suffix)
         set_analytics(session_id, SESSION_SCOPE, suffix, analytics)
     except Exception:
-        pass
+        logger.warning("Post-repair analytics re-cache failed id=%s", session_id)
 
     _set_status(session_id, total, cached_count, failed_count, done=True,
                 verified=verified, repaired=repaired, verifying=False)
+    logger.info(
+        "Prefetch done id=%s total=%d cached=%d failed=%d repaired=%d",
+        session_id, total, cached_count, failed_count, repaired,
+    )
 
 
 def _charts_equal(a: dict, b: dict) -> bool:
