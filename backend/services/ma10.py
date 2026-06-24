@@ -32,6 +32,29 @@ def wide_trend_block(trend_w: np.ndarray, i_w: int) -> tuple[int, int]:
         e += 1
     return s, e
 
+def extend_low_below_ma(
+    low: np.ndarray, vis_start: int, vis_end: int, ma_level: float
+) -> float:
+    # Walk outward from [vis_start, vis_end] in both directions, absorbing
+    # candles whose low still sits at/below ma_level even if they fall outside
+    # the strict trend block (e.g. a same-direction dip interrupted by a brief
+    # blip back above the MA10). Stops the moment a candle's low would cross
+    # above the MA10 level, so the box never extends past where price actually
+    # surfaced.
+    best = float(low[vis_start: vis_end + 1].min())
+
+    j = vis_start - 1
+    while j >= 0 and low[j] <= ma_level:
+        best = min(best, float(low[j]))
+        j -= 1
+
+    j = vis_end + 1
+    while j < len(low) and low[j] <= ma_level:
+        best = min(best, float(low[j]))
+        j += 1
+
+    return best
+
 def get_quartile(price: float, price_lo: float, price_hi: float) -> int:
     h = price_hi - price_lo
     if h <= 0:

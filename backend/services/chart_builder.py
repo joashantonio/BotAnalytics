@@ -501,6 +501,7 @@ def _build_quartile_boxes_ma10(
     # an above-MA10 run (trend == 1).
     drawn_blocks: set[tuple] = set()
     boxes = []
+    wide_lows = df_wide["Low"].values.astype(float)
 
     # For ongoing trades, anchor the box on the block containing the
     # earliest qualifying order, so it starts at the beginning of the
@@ -564,7 +565,9 @@ def _build_quartile_boxes_ma10(
             continue
 
         if is_buy:
-            price_lo = float(block_lows.min())
+            price_lo = ma10_mod.extend_low_below_ma(
+                wide_lows, bs_vis + start_i, be_vis + start_i, first_ma
+            )
             price_hi = first_ma
         else:
             price_lo = first_ma
