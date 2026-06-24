@@ -39,7 +39,8 @@ export default function ChartModal({
   mode = 'psar',
   onClose,
 }: Props) {
-  const { data, loading, error, load } = useChart(sessionId, suffix, PLOT_MODE[mode])
+  const [indicatorMode, setIndicatorMode] = useState<'psar' | 'ma10' | 'ma200'>(PLOT_MODE[mode])
+  const { data, loading, error, load } = useChart(sessionId, suffix, indicatorMode)
   const [showProfitPct, setShowProfitPct] = useState(false)
   const [drawPriceRange, setDrawPriceRange] = useState(false)
   const [priceRangeCount, setPriceRangeCount] = useState(0)
@@ -48,7 +49,7 @@ export default function ChartModal({
 
   useEffect(() => {
     load(symbol, tradeId)
-  }, [symbol, tradeId, load])
+  }, [symbol, tradeId, indicatorMode, load])
 
   // Close on Escape.
   useEffect(() => {
@@ -106,6 +107,15 @@ export default function ChartModal({
           )}
           </div>
           <div className="flex items-center gap-3 shrink-0">
+            <select
+              value={indicatorMode}
+              onChange={(e) => setIndicatorMode(e.target.value as 'psar' | 'ma10' | 'ma200')}
+              className="bg-surface border border-border rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-accent"
+            >
+              <option value="psar">PSAR</option>
+              <option value="ma10">MA10</option>
+              <option value="ma200">MA200</option>
+            </select>
             {data && (
               <button
                 onClick={() => setShowProfitPct((v) => !v)}
