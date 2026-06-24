@@ -95,22 +95,83 @@ def _download_ohlcv(ticker: str, from_date: str, to_date: str) -> pd.DataFrame:
 # rounding and pre/post-market fills just outside the regular-session range.
 EXEC_BAND_PAD = 0.10  # accept exec within [day_low*(1-pad), day_high*(1+pad)]
 
+# Special case: 8230.SR. This one ticker's CSV records some fills at twice the
+# real per-share price (broker booked a pre-split fill at 2x the post-split
+# candle scale), so an exec sits at ~2x its day's candle and fails the band
+# check. ONLY for this ticker we accept the exec if HALF of it fits the candle
+# and renormalize that fill to exec/2 everywhere it's plotted/aggregated. Every
+# other ticker keeps the strict refuse-wrong-scale behavior.
+HALF_SCALE_TICKERS = {"8230.SR"}
+EXEC_HALF_DIVISOR = 2.0
 
-def _execs_match_candles(df: pd.DataFrame, ref_points: "list[tuple[str, float]] | None") -> bool:
-    """True if each (exec_date, exec_price) sits within that date's candle.
+
+def _band_ok(price: float, lo: float, hi: float) -> bool:
+    return lo * (1.0 - EXEC_BAND_PAD) <= price <= hi * (1.0 + EXEC_BAND_PAD)
+
+
+def _exec_scale_factor(price: float, lo: float, hi: float, allow_half: bool) -> float | None:
+    """Factor to multiply `price` by so it fits the [lo, hi] candle band, or
+    None if it doesn't fit.
+
+    Returns 1.0 when the raw price already fits. When allow_half (the 8230.SR
+    special case), also returns 0.5 if only price/2 fits."""
+    if _band_ok(price, lo, hi):
+        return 1.0
+    if allow_half and _band_ok(price / EXEC_HALF_DIVISOR, lo, hi):
+        return 1.0 / EXEC_HALF_DIVISOR
+    return None
+
+
+def exec_scale_factors(
+    ticker: str, df: pd.DataFrame, ref_points: "list[tuple[str, float]] | None"
+) -> "dict[str, float]":
+    """Per-execution-date scale factor to apply to that date's exec price so it
+    fits its candle. 1.0 = already fits, 0.5 = only fits when halved (8230.SR
+    special case only). Dates that can't be checked (no candle, non-positive
+    band) get no entry. Empty when there's nothing to validate against."""
+    factors: dict[str, float] = {}
+    if not ref_points or df.empty or "Low" not in df.columns or "High" not in df.columns:
+        return factors
+    allow_half = ticker in HALF_SCALE_TICKERS
+    idx = [d.strftime("%Y-%m-%d") for d in df.index]
+    lows = df["Low"].values.astype(float)
+    highs = df["High"].values.astype(float)
+    band = {idx[i]: (float(lows[i]), float(highs[i])) for i in range(len(idx))}
+
+    for date_str, price in ref_points:
+        if price is None or price <= 0:
+            continue
+        lh = band.get(date_str)
+        if lh is None:
+            continue
+        lo, hi = lh
+        if lo <= 0 or hi <= 0:
+            continue
+        f = _exec_scale_factor(price, lo, hi, allow_half)
+        if f is not None:
+            factors[date_str] = f
+    return factors
+
+
+def _execs_match_candles(
+    ticker: str, df: pd.DataFrame, ref_points: "list[tuple[str, float]] | None"
+) -> bool:
+    """True if each (exec_date, exec_price) sits within that date's candle. For
+    8230.SR a fill also matches if its halved price fits (a pre-split fill booked
+    at 2x scale); every other ticker requires the raw price to fit.
 
     Only dates present in the fetched data are checked (an exec on a day with
     no candle — holiday, pre-listing — is skipped, not a failure). If NONE of
     the exec dates are present, fall back to accepting (can't validate)."""
     if not ref_points or df.empty or "Low" not in df.columns or "High" not in df.columns:
         return True
+    allow_half = ticker in HALF_SCALE_TICKERS
     # Map date-string -> (low, high) for O(1) lookup.
     idx = [d.strftime("%Y-%m-%d") for d in df.index]
     lows = df["Low"].values.astype(float)
     highs = df["High"].values.astype(float)
     band = {idx[i]: (float(lows[i]), float(highs[i])) for i in range(len(idx))}
 
-    checked = 0
     for date_str, price in ref_points:
         if price is None or price <= 0:
             continue
@@ -120,8 +181,7 @@ def _execs_match_candles(df: pd.DataFrame, ref_points: "list[tuple[str, float]] 
         lo, hi = lh
         if lo <= 0 or hi <= 0:
             continue
-        checked += 1
-        if not (lo * (1.0 - EXEC_BAND_PAD) <= price <= hi * (1.0 + EXEC_BAND_PAD)):
+        if _exec_scale_factor(price, lo, hi, allow_half) is None:
             return False  # this fill couldn't have happened in this candle
     return True  # all checkable execs matched (or none were checkable)
 
@@ -143,16 +203,16 @@ def fetch_ohlcv(
     cached = get_ohlcv(ticker, from_date, to_date)
     if cached is not None:
         df_cached = _json_to_df(cached)
-        if _execs_match_candles(df_cached, ref_points):
+        if _execs_match_candles(ticker, df_cached, ref_points):
             return _drop_market_breaks(df_cached)
         # Cached row is wrong-scale (stale bad yfinance response) -> evict + refetch.
         del_ohlcv(ticker, from_date, to_date)
 
     df = _download_ohlcv(ticker, from_date, to_date)
-    if not _execs_match_candles(df, ref_points):
+    if not _execs_match_candles(ticker, df, ref_points):
         # One retry: transient wrong/mis-adjusted response from yfinance.
         df = _download_ohlcv(ticker, from_date, to_date)
-        if not _execs_match_candles(df, ref_points):
+        if not _execs_match_candles(ticker, df, ref_points):
             logger.warning("Execution-band validation failed for %s after retry", ticker)
             raise ValueError(
                 f"Market data for {ticker!r} failed execution-band validation "

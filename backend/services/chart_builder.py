@@ -3,7 +3,7 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 
-from .market_data import fetch_wide, get_company_name
+from .market_data import fetch_wide, get_company_name, exec_scale_factors
 from .psar import compute_psar, compute_chart_window, wide_trend_block, get_quartile
 from . import ma10 as ma10_mod
 from . import ma200 as ma200_mod
@@ -33,6 +33,56 @@ def _ref_points_from_orders(orders) -> list[tuple[str, float]]:
             continue
         pts.append((_order_exec_date(o).strftime("%Y-%m-%d"), float(ep)))
     return pts
+
+def _normalize_orders_to_candles(ticker: str, orders: list[dict], df_wide: "pd.DataFrame") -> list[dict]:
+    """Return orders with each exec_price rescaled to fit its day's candle.
+
+    Only 8230.SR is affected (see HALF_SCALE_TICKERS): some of its fills are
+    booked at 2x the post-split candle scale, so we divide those by 2. Returns a
+    shallow copy per rescaled order so the in-memory trade store is untouched;
+    every consumer below (markers, avg buy/sell, realized P/L, quartile boxes)
+    then reads the corrected price uniformly. Other tickers pass through as-is."""
+    factors = exec_scale_factors(ticker, df_wide, _ref_points_from_orders(orders))
+    if not factors:
+        return orders
+    out = []
+    for o in orders:
+        ep = o.get("exec_price")
+        if ep is None:
+            out.append(o)
+            continue
+        f = factors.get(_order_exec_date(o).strftime("%Y-%m-%d"), 1.0)
+        if f == 1.0:
+            out.append(o)
+        else:
+            o2 = dict(o)
+            o2["exec_price"] = float(ep) * f
+            out.append(o2)
+    return out
+
+def _rescale_rel_to_candles(ticker: str, rel: list[tuple], df_wide: "pd.DataFrame") -> list[tuple]:
+    """Analytics analogue of _normalize_orders_to_candles. `rel` is a list of
+    (exec_date, trade_id, order) — rescale each order's exec_price to fit its
+    candle (8230.SR only). Returns copies so the trade store is untouched."""
+    ref_points = [
+        (ed.strftime("%Y-%m-%d"), float(o["exec_price"]))
+        for ed, _tid, o in rel
+        if o.get("exec_price") is not None
+    ]
+    factors = exec_scale_factors(ticker, df_wide, ref_points)
+    if not factors:
+        return rel
+    out = []
+    for ed, tid, o in rel:
+        ep = o.get("exec_price")
+        f = factors.get(ed.strftime("%Y-%m-%d"), 1.0) if ep is not None else 1.0
+        if f == 1.0:
+            out.append((ed, tid, o))
+        else:
+            o2 = dict(o)
+            o2["exec_price"] = float(ep) * f
+            out.append((ed, tid, o2))
+    return out
 
 def _last_exec_index_in_block(
     orders, df_wide: "pd.DataFrame", bs_w: int, be_w: int, start_i: int
@@ -150,6 +200,8 @@ def build_chart_data(
     df_wide = _df_wide_override if _df_wide_override is not None else fetch_wide(
         ticker, entry_date, exit_date, ref_points=_ref_points_from_orders(orders)
     )
+    # 8230.SR special case: rescale 2x-booked fills to fit the candles.
+    orders = _normalize_orders_to_candles(ticker, orders, df_wide)
     highs_w = df_wide["High"].values.astype(float)
     lows_w = df_wide["Low"].values.astype(float)
     sar_w, trend_w = compute_psar(highs_w, lows_w)
@@ -371,6 +423,8 @@ def build_chart_data_ma10(
     df_wide = _df_wide_override if _df_wide_override is not None else fetch_wide(
         ticker, entry_date, exit_date, ref_points=_ref_points_from_orders(orders)
     )
+    # 8230.SR special case: rescale 2x-booked fills to fit the candles.
+    orders = _normalize_orders_to_candles(ticker, orders, df_wide)
     closes_w = df_wide["Close"].values.astype(float)
     ma_w = ma10_mod.compute_ma10(closes_w)
     trend_w = ma10_mod.compute_trend(closes_w, ma_w)
@@ -740,6 +794,9 @@ def build_chart_data_ma200(
         trend_w = ma200_mod.compute_trend(closes_w, ma_w)
     else:
         df_wide, ma_w, trend_w = _fetch_ma200_resolved(ticker, entry_date, exit_date, orders)
+
+    # 8230.SR special case: rescale 2x-booked fills to fit the candles.
+    orders = _normalize_orders_to_candles(ticker, orders, df_wide)
 
     # MA200 trend cycles span months, so the cycle-based window balloons to a
     # year of candles. Frame tightly on the order span (+pad) instead.
@@ -1212,6 +1269,10 @@ def compute_correct_executions(
         dates = df_wide.index
         n_w = len(df_wide)
 
+        # 8230.SR special case: rescale 2x-booked fills so the displayed exec
+        # price and its quartile match the candles.
+        rel = _rescale_rel_to_candles(ticker, rel, df_wide)
+
         for ed, tid, o in rel:
             i_w = int(np.searchsorted(dates, ed, side="left"))
             i_w = min(i_w, n_w - 1)
@@ -1349,6 +1410,9 @@ def _compute_correct_executions_ma10(
         dates = df_wide.index
         n_w = len(df_wide)
 
+        # 8230.SR special case: rescale 2x-booked fills to fit the candles.
+        rel = _rescale_rel_to_candles(ticker, rel, df_wide)
+
         for ed, tid, o in rel:
             i_w = int(np.searchsorted(dates, ed, side="left"))
             i_w = min(i_w, n_w - 1)
@@ -1484,6 +1548,9 @@ def _compute_correct_executions_ma200(
         trend_w = ma200_mod.compute_trend(closes, ma_w)
         dates = df_wide.index
         n_w = len(df_wide)
+
+        # 8230.SR special case: rescale 2x-booked fills to fit the candles.
+        rel = _rescale_rel_to_candles(ticker, rel, df_wide)
 
         for ed, tid, o in rel:
             i_w = int(np.searchsorted(dates, ed, side="left"))
