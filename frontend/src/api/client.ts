@@ -72,6 +72,24 @@ export const api = {
     return req(`/symbols/${sessionId}/${symbol}/chart?${qs.toString()}`)
   },
 
+  saveBoxOverride: (
+    sessionId: string,
+    symbol: string,
+    body: {
+      trade_id: string
+      mode: 'psar' | 'ma10' | 'ma200'
+      box_index: number
+      price_lo: number
+      price_hi: number
+      right_date?: string
+    },
+  ): Promise<{ saved: boolean }> =>
+    req(`/symbols/${sessionId}/${symbol}/chart/box-override`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+
   getSymbolAnalytics: (
     sessionId: string,
     symbol: string,

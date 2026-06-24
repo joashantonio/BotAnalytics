@@ -180,6 +180,10 @@ export default function ChartModal({
               drawPriceRange={drawPriceRange}
               onPriceRangeCountChange={setPriceRangeCount}
               theme={theme}
+              sessionId={sessionId}
+              symbol={symbol}
+              tradeId={tradeId}
+              mode={indicatorMode}
             />
           )}
         </div>

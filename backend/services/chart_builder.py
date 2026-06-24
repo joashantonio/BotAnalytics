@@ -394,6 +394,7 @@ def _build_quartile_boxes(
         ]
 
         boxes.append({
+            "box_index": len(boxes),
             "side": "buy" if is_buy else "sell",
             "color": PIN_BUY if is_buy else PIN_SELL,
             "price_lo": round(price_lo, 4),
@@ -643,6 +644,7 @@ def _build_quartile_boxes_ma10(
         ]
 
         boxes.append({
+            "box_index": len(boxes),
             "side": "buy" if is_buy else "sell",
             "color": PIN_BUY if is_buy else PIN_SELL,
             "price_lo": round(price_lo, 4),
@@ -1037,6 +1039,7 @@ def _build_quartile_boxes_ma200(
         ]
 
         boxes.append({
+            "box_index": len(boxes),
             "side": "buy" if is_buy else "sell",
             "color": PIN_BUY if is_buy else PIN_SELL,
             "price_lo": round(price_lo, 4),

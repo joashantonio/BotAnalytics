@@ -4,8 +4,10 @@ import json
 import pandas as pd
 from fastapi import APIRouter, HTTPException, Query
 
+from pydantic import BaseModel
+
 from ..services.chart_builder import build_chart_data, build_chart_data_ma10, build_chart_data_ma200, build_analytics, compute_correct_executions
-from ..store import get_session
+from ..store import get_session, get_box_overrides, save_box_override
 from ..cache import (
     get_chart, set_chart,
     get_analytics, set_analytics, SESSION_SCOPE,
@@ -170,22 +172,65 @@ async def get_chart_endpoint(
 
     cached = get_chart(session_id, trade_id, symbol, cache_suffix)
     if cached is not None:
-        return cached
+        data = cached
+    else:
+        try:
+            if mode == "ma10":
+                data = build_chart_data_ma10(trades[key], suffix=suffix, from_date=from_date, to_date=to_date)
+            elif mode == "ma200":
+                data = build_chart_data_ma200(trades[key], suffix=suffix, from_date=from_date, to_date=to_date)
+            else:
+                data = build_chart_data(trades[key], suffix=suffix, from_date=from_date, to_date=to_date)
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Chart generation failed: {e}")
 
-    try:
-        if mode == "ma10":
-            data = build_chart_data_ma10(trades[key], suffix=suffix, from_date=from_date, to_date=to_date)
-        elif mode == "ma200":
-            data = build_chart_data_ma200(trades[key], suffix=suffix, from_date=from_date, to_date=to_date)
-        else:
-            data = build_chart_data(trades[key], suffix=suffix, from_date=from_date, to_date=to_date)
-    except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Chart generation failed: {e}")
+        set_chart(session_id, trade_id, symbol, cache_suffix, data)
 
-    set_chart(session_id, trade_id, symbol, cache_suffix, data)
+    # Layer in any manually-edited box positions. Applied after the cache
+    # lookup (not baked into the cached payload) so an edit takes effect
+    # immediately without needing to bust the chart cache.
+    overrides = get_box_overrides(session_id, trade_id, symbol, mode)
+    if overrides and data.get("quartile_boxes"):
+        data = {**data, "quartile_boxes": [
+            {**box, **overrides[box["box_index"]]} if box["box_index"] in overrides else box
+            for box in data["quartile_boxes"]
+        ]}
+
     return data
+
+
+class BoxOverrideRequest(BaseModel):
+    trade_id: str
+    mode: str
+    box_index: int
+    price_lo: float
+    price_hi: float
+    right_date: str | None = None
+
+
+@router.put("/{session_id}/{symbol}/chart/box-override")
+async def put_box_override(session_id: str, symbol: str, body: BoxOverrideRequest):
+    session = get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    mode = body.mode.strip().lower()
+    if mode not in ("psar", "ma10", "ma200"):
+        raise HTTPException(status_code=422, detail="mode must be 'psar', 'ma10', or 'ma200'")
+    if body.price_hi <= body.price_lo:
+        raise HTTPException(status_code=422, detail="price_hi must be greater than price_lo")
+
+    key = (body.trade_id, symbol)
+    if key not in session["trades"]:
+        raise HTTPException(status_code=404, detail=f"Trade {body.trade_id} / {symbol} not found")
+
+    save_box_override(
+        session_id, body.trade_id, symbol, mode, body.box_index,
+        body.price_lo, body.price_hi, body.right_date,
+    )
+    return {"saved": True}
 
 @router.get("/{session_id}/{symbol}/analytics")
 async def get_symbol_analytics(

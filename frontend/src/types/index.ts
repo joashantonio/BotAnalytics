@@ -56,6 +56,7 @@ export interface Marker {
 }
 
 export interface QuartileBox {
+  box_index: number
   side: 'buy' | 'sell'
   color: string
   price_lo: number

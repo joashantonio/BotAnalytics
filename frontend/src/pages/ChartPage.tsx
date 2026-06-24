@@ -337,6 +337,10 @@ export default function ChartPage({
               drawPriceRange={drawPriceRange}
               onPriceRangeCountChange={setPriceRangeCount}
               theme={theme}
+              sessionId={session?.session_id}
+              symbol={selectedSymbol ?? undefined}
+              tradeId={selectedTradeId ?? undefined}
+              mode={indicatorMode}
             />
           )}
         </div>

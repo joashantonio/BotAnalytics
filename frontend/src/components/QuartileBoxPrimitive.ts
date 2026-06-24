@@ -10,6 +10,7 @@ import type {
 } from 'lightweight-charts'
 
 export interface QuartileBox {
+  box_index: number
   side: 'buy' | 'sell'
   color: string
   price_lo: number
@@ -29,11 +30,40 @@ function hexToRgba(hex: string, alpha: number): string {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`
 }
 
+/**
+ * timeToCoordinate() returns null for any date past the last real candle
+ * (e.g. the blank rightOffset margin reserved for an ongoing trade's box).
+ * Falls back to extrapolating from the last two candles' spacing so boxes
+ * whose right_date sits at or beyond "today" still render/hit-test there.
+ */
+function dateToCoordinate(
+  timeScale: ReturnType<IChartApi['timeScale']>,
+  lastCandleTimes: readonly string[],
+  dateIso: string,
+): number | null {
+  const direct = timeScale.timeToCoordinate(dateIso as Time)
+  if (direct != null) return direct
+  if (lastCandleTimes.length < 2) return null
+
+  const last = lastCandleTimes[lastCandleTimes.length - 1]
+  const prev = lastCandleTimes[lastCandleTimes.length - 2]
+  const lastCoord = timeScale.timeToCoordinate(last as Time)
+  const prevCoord = timeScale.timeToCoordinate(prev as Time)
+  if (lastCoord == null || prevCoord == null) return null
+
+  const msPerBar = new Date(last).getTime() - new Date(prev).getTime()
+  if (msPerBar <= 0) return null
+  const pxPerBar = lastCoord - prevCoord
+  const barsPast = (new Date(dateIso).getTime() - new Date(last).getTime()) / msPerBar
+  return lastCoord + barsPast * pxPerBar
+}
+
 class QuartileBoxRenderer implements ISeriesPrimitivePaneRenderer {
   constructor(
     private _boxes: QuartileBox[],
     private _chart: IChartApi,
     private _series: ISeriesApi<'Candlestick'>,
+    private _lastCandleTimes: readonly string[],
   ) {}
 
   draw(target: { useMediaCoordinateSpace: (cb: (scope: MediaScope) => void) => void }) {
@@ -42,8 +72,8 @@ class QuartileBoxRenderer implements ISeriesPrimitivePaneRenderer {
       const timeScale = this._chart.timeScale()
 
       for (const box of this._boxes) {
-        const xLeft = timeScale.timeToCoordinate(box.left_date as Time)
-        const xRight = timeScale.timeToCoordinate(box.right_date as Time)
+        const xLeft = dateToCoordinate(timeScale, this._lastCandleTimes, box.left_date)
+        const xRight = dateToCoordinate(timeScale, this._lastCandleTimes, box.right_date)
         const yHi = this._series.priceToCoordinate(box.price_hi)
         const yLo = this._series.priceToCoordinate(box.price_lo)
         if (xLeft == null || xRight == null || yHi == null || yLo == null) continue
@@ -103,8 +133,13 @@ interface MediaScope {
 class QuartileBoxPaneView implements ISeriesPrimitivePaneView {
   private _renderer: QuartileBoxRenderer
 
-  constructor(boxes: QuartileBox[], chart: IChartApi, series: ISeriesApi<'Candlestick'>) {
-    this._renderer = new QuartileBoxRenderer(boxes, chart, series)
+  constructor(
+    boxes: QuartileBox[],
+    chart: IChartApi,
+    series: ISeriesApi<'Candlestick'>,
+    lastCandleTimes: readonly string[],
+  ) {
+    this._renderer = new QuartileBoxRenderer(boxes, chart, series, lastCandleTimes)
   }
 
   renderer(): ISeriesPrimitivePaneRenderer {
@@ -112,30 +147,89 @@ class QuartileBoxPaneView implements ISeriesPrimitivePaneView {
   }
 }
 
+/** Pixels of slack around an edge that still counts as a hit. */
+const EDGE_HIT_PX = 5
+
+export type QuartileBoxEdge = 'lo' | 'hi' | 'right'
+
 export class QuartileBoxPrimitive implements ISeriesPrimitive<Time> {
   private _paneViews: QuartileBoxPaneView[] = []
   private _boxes: QuartileBox[]
   private _requestUpdate?: () => void
+  private _chart?: IChartApi
+  private _series?: ISeriesApi<'Candlestick'>
+  /** Last two candle times, used to extrapolate dates past the chart's data range. */
+  private _lastCandleTimes: readonly string[]
 
-  constructor(boxes: QuartileBox[]) {
+  constructor(boxes: QuartileBox[], lastCandleTimes: readonly string[] = []) {
     this._boxes = boxes
+    this._lastCandleTimes = lastCandleTimes
   }
 
   attached(param: SeriesAttachedParameter<Time>): void {
     this._requestUpdate = param.requestUpdate
-    this._paneViews = [
-      new QuartileBoxPaneView(
-        this._boxes,
-        param.chart,
-        param.series as ISeriesApi<'Candlestick'>,
-      ),
-    ]
+    this._chart = param.chart
+    this._series = param.series as ISeriesApi<'Candlestick'>
+    this._rebuildViews()
     this._requestUpdate?.()
   }
 
   detached(): void {
     this._paneViews = []
     this._requestUpdate = undefined
+  }
+
+  setBoxes(boxes: QuartileBox[]): void {
+    this._boxes = boxes
+    this._rebuildViews()
+    this._requestUpdate?.()
+  }
+
+  /**
+   * Finds the box edge under (x, y) in pixel space, if any. Used to show a
+   * resize cursor and to start an edge-drag. Checks the right (time) edge
+   * first since it's a thin vertical line that the wider top/bottom hit
+   * zones could otherwise mask near the corner. Returns null when no edge
+   * is within EDGE_HIT_PX of the pointer.
+   */
+  findEdgeAt(x: number, y: number): { boxIndex: number; edge: QuartileBoxEdge } | null {
+    if (!this._chart || !this._series) return null
+    const timeScale = this._chart.timeScale()
+    for (let i = this._boxes.length - 1; i >= 0; i--) {
+      const box = this._boxes[i]
+      const xLeft = dateToCoordinate(timeScale, this._lastCandleTimes, box.left_date)
+      const xRight = dateToCoordinate(timeScale, this._lastCandleTimes, box.right_date)
+      const yHi = this._series.priceToCoordinate(box.price_hi)
+      const yLo = this._series.priceToCoordinate(box.price_lo)
+      if (xLeft == null || xRight == null || yHi == null || yLo == null) continue
+      const x0 = Math.min(xLeft, xRight)
+      const x1 = Math.max(xLeft, xRight)
+      const yTop = Math.min(yHi, yLo)
+      const yBot = Math.max(yHi, yLo)
+      if (y < yTop - EDGE_HIT_PX || y > yBot + EDGE_HIT_PX) continue
+
+      if (Math.abs(x - x1) <= EDGE_HIT_PX) {
+        return { boxIndex: i, edge: 'right' }
+      }
+      // eslint-disable-next-line no-console
+      console.debug('[quartile-debug]', { x, y, x0, x1, yTop, yBot, dxRight: x - x1 })
+      if (x < x0 || x > x1) continue
+
+      if (Math.abs(y - yTop) <= EDGE_HIT_PX) {
+        return { boxIndex: i, edge: yTop === yHi ? 'hi' : 'lo' }
+      }
+      if (Math.abs(y - yBot) <= EDGE_HIT_PX) {
+        return { boxIndex: i, edge: yBot === yHi ? 'hi' : 'lo' }
+      }
+    }
+    return null
+  }
+
+  private _rebuildViews(): void {
+    if (!this._chart || !this._series) return
+    this._paneViews = [
+      new QuartileBoxPaneView(this._boxes, this._chart, this._series, this._lastCandleTimes),
+    ]
   }
 
   updateAllViews(): void {}

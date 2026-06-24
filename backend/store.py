@@ -66,6 +66,25 @@ def _init_db() -> None:
                 csv_bytes    BLOB NOT NULL
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS quartile_box_overrides (
+                session_id   TEXT NOT NULL,
+                trade_id     TEXT NOT NULL,
+                symbol       TEXT NOT NULL,
+                mode         TEXT NOT NULL,
+                box_index    INTEGER NOT NULL,
+                price_lo     REAL NOT NULL,
+                price_hi     REAL NOT NULL,
+                right_date   TEXT,
+                updated_at   TEXT NOT NULL DEFAULT (datetime('now')),
+                PRIMARY KEY (session_id, trade_id, symbol, mode, box_index)
+            )
+        """)
+        # Older DBs created before right_date existed; add it in place so
+        # existing override rows (and the file) aren't lost.
+        cols = {row["name"] for row in conn.execute("PRAGMA table_info(quartile_box_overrides)")}
+        if "right_date" not in cols:
+            conn.execute("ALTER TABLE quartile_box_overrides ADD COLUMN right_date TEXT")
 
 
 _init_db()
@@ -136,4 +155,53 @@ def delete_session(session_id: str) -> bool:
         cur = conn.execute(
             "DELETE FROM sessions WHERE session_id = ?", (session_id,)
         )
+        conn.execute(
+            "DELETE FROM quartile_box_overrides WHERE session_id = ?", (session_id,)
+        )
         return cur.rowcount > 0
+
+
+def save_box_override(
+    session_id: str,
+    trade_id: str,
+    symbol: str,
+    mode: str,
+    box_index: int,
+    price_lo: float,
+    price_hi: float,
+    right_date: str | None = None,
+) -> None:
+    with _get_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO quartile_box_overrides
+                (session_id, trade_id, symbol, mode, box_index, price_lo, price_hi, right_date, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+            ON CONFLICT (session_id, trade_id, symbol, mode, box_index)
+            DO UPDATE SET price_lo = excluded.price_lo,
+                          price_hi = excluded.price_hi,
+                          right_date = excluded.right_date,
+                          updated_at = excluded.updated_at
+            """,
+            (session_id, trade_id, symbol, mode, box_index, price_lo, price_hi, right_date),
+        )
+
+
+def get_box_overrides(
+    session_id: str, trade_id: str, symbol: str, mode: str
+) -> dict[int, dict[str, float | str]]:
+    with _get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT box_index, price_lo, price_hi, right_date FROM quartile_box_overrides
+            WHERE session_id = ? AND trade_id = ? AND symbol = ? AND mode = ?
+            """,
+            (session_id, trade_id, symbol, mode),
+        ).fetchall()
+    result: dict[int, dict[str, float | str]] = {}
+    for r in rows:
+        override: dict[str, float | str] = {"price_lo": r["price_lo"], "price_hi": r["price_hi"]}
+        if r["right_date"]:
+            override["right_date"] = r["right_date"]
+        result[r["box_index"]] = override
+    return result

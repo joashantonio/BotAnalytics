@@ -3,6 +3,7 @@ import {
   createChart,
   CrosshairMode,
   LineStyle,
+  isBusinessDay,
   type IChartApi,
   type ISeriesApi,
   type CandlestickData,
@@ -11,13 +12,14 @@ import {
   type MouseEventParams,
 } from 'lightweight-charts'
 import type { ChartData, SelectedExec } from '../types'
-import { QuartileBoxPrimitive } from './QuartileBoxPrimitive'
+import { QuartileBoxPrimitive, type QuartileBox, type QuartileBoxEdge } from './QuartileBoxPrimitive'
 import { PinMarkerPrimitive, type PinMarker, type PinHighlight } from './PinMarkerPrimitive'
 import { ExecDateHighlightPrimitive } from './ExecDateHighlightPrimitive'
 import { SelectedExecLinePrimitive } from './SelectedExecLinePrimitive'
 import { ProfitPctPrimitive } from './ProfitPctPrimitive'
 import { PriceRangePrimitive, type PriceRangeBox } from './PriceRangePrimitive'
 import { chartChrome } from '../lib/chartTheme'
+import { api } from '../api/client'
 
 interface Props {
   data: ChartData
@@ -31,6 +33,11 @@ interface Props {
   onPriceRangeCountChange?: (count: number) => void
   /** App theme; passed so the chart re-creates with matching chrome on toggle. */
   theme?: 'dark' | 'light'
+  /** Identifiers needed to persist a manually-edited quartile box. Omit to disable editing. */
+  sessionId?: string
+  symbol?: string
+  tradeId?: string
+  mode?: 'psar' | 'ma10' | 'ma200'
 }
 
 export interface TradeChartHandle {
@@ -59,7 +66,7 @@ const COLORS = {
 }
 
 const TradeChart = forwardRef<TradeChartHandle, Props>(function TradeChart(
-  { data, highlightExec, showProfitPct, drawPriceRange, onPriceRangeCountChange, theme },
+  { data, highlightExec, showProfitPct, drawPriceRange, onPriceRangeCountChange, theme, sessionId, symbol, tradeId, mode },
   ref,
 ) {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -68,6 +75,9 @@ const TradeChart = forwardRef<TradeChartHandle, Props>(function TradeChart(
   const priceRangePrimitiveRef = useRef<PriceRangePrimitive | null>(null)
   const priceRangeBoxesRef = useRef<PriceRangeBox[]>([])
   const dragStartRef = useRef<{ time: Time; price: number } | null>(null)
+  const quartileBoxPrimitiveRef = useRef<QuartileBoxPrimitive | null>(null)
+  const quartileBoxesRef = useRef<QuartileBox[]>([])
+  const boxEdgeDragRef = useRef<{ boxIndex: number; edge: QuartileBoxEdge } | null>(null)
 
   const setPriceRangeBoxes = (boxes: PriceRangeBox[]) => {
     priceRangeBoxesRef.current = boxes
@@ -277,8 +287,12 @@ const TradeChart = forwardRef<TradeChartHandle, Props>(function TradeChart(
     // Drawn via a custom series primitive (canvas) so each box is bounded to
     // its trend block (left_date..right_date) with fill, border, dividers and
     // Q labels — matching _draw_quartile_box in the matplotlib reference.
+    quartileBoxesRef.current = data.quartile_boxes
     if (data.quartile_boxes.length > 0) {
-      candleSeries.attachPrimitive(new QuartileBoxPrimitive(data.quartile_boxes))
+      const lastCandleTimes = data.candles.slice(-2).map((c) => c.time)
+      const quartileBoxPrimitive = new QuartileBoxPrimitive(data.quartile_boxes, lastCandleTimes)
+      candleSeries.attachPrimitive(quartileBoxPrimitive)
+      quartileBoxPrimitiveRef.current = quartileBoxPrimitive
     }
 
     // ── Per-candle profit % vs. avg buy ─────────────────────────────────────
@@ -328,6 +342,7 @@ const TradeChart = forwardRef<TradeChartHandle, Props>(function TradeChart(
       chartRef.current = null
       candleRef.current = null
       priceRangePrimitiveRef.current = null
+      quartileBoxPrimitiveRef.current = null
     }
   }, [data, highlightExec, showProfitPct, theme])
 
@@ -399,6 +414,140 @@ const TradeChart = forwardRef<TradeChartHandle, Props>(function TradeChart(
       priceRangePrimitiveRef.current?.setBoxes(priceRangeBoxesRef.current)
     }
   }, [drawPriceRange, data])
+
+  // ── Quartile box edge resize ────────────────────────────────────────────
+  // Dragging the top/bottom border of a green quartile box adjusts price_hi
+  // /price_lo; dragging the right (time) border adjusts right_date. Live
+  // while dragging; on release the new bounds are persisted via the
+  // box-override endpoint so they survive a reload. Disabled while the
+  // Price Range tool is active (drawPriceRange) to avoid gesture conflicts,
+  // and when the identifiers needed to save aren't supplied.
+  useEffect(() => {
+    const container = containerRef.current
+    const chart = chartRef.current
+    const series = candleRef.current
+    const primitive = quartileBoxPrimitiveRef.current
+    if (!container || !chart || !series || !primitive || drawPriceRange) return
+    if (!sessionId || !symbol || !tradeId || !mode) return
+
+    const getRelativeXY = (e: MouseEvent) => {
+      const rect = container.getBoundingClientRect()
+      return { x: e.clientX - rect.left, y: e.clientY - rect.top }
+    }
+
+    // lightweight-charts represents a date-string series' time as a
+    // BusinessDay ({year, month, day}); left_date/right_date are plain
+    // "YYYY-MM-DD" strings, so convert back to that shape after a drag.
+    const businessDayToIso = (time: Time): string | null => {
+      if (!isBusinessDay(time)) return null
+      const mm = String(time.month).padStart(2, '0')
+      const dd = String(time.day).padStart(2, '0')
+      return `${time.year}-${mm}-${dd}`
+    }
+
+    // coordinateToTime() only resolves coordinates that land on an actual
+    // bar — it returns null in the blank rightOffset margin past the last
+    // candle, which is exactly where an "ongoing" trade's box (today, or
+    // close to it) needs to be draggable further right. coordinateToLogical
+    // keeps working out there, so fall back to it and extrapolate the date
+    // using the spacing between the chart's last two candles.
+    const xToIso = (x: number): string | null => {
+      const time = chart.timeScale().coordinateToTime(x)
+      if (time != null) return businessDayToIso(time)
+
+      const logical = chart.timeScale().coordinateToLogical(x)
+      if (logical == null) return null
+      const candles = data.candles
+      if (candles.length < 2) return null
+      const last = new Date(candles[candles.length - 1].time)
+      const prev = new Date(candles[candles.length - 2].time)
+      const msPerBar = last.getTime() - prev.getTime()
+      if (msPerBar <= 0) return null
+      const lastLogical = candles.length - 1
+      const barsPast = logical - lastLogical
+      const ms = last.getTime() + barsPast * msPerBar
+      return new Date(ms).toISOString().slice(0, 10)
+    }
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const { x, y } = getRelativeXY(e)
+      if (!boxEdgeDragRef.current) {
+        const edge = primitive.findEdgeAt(x, y)
+        container.style.cursor = edge ? (edge.edge === 'right' ? 'ew-resize' : 'ns-resize') : ''
+        // Disable the chart's own pan/zoom the moment the pointer is over an
+        // edge — not at mousedown — since lightweight-charts' pan listener
+        // lives on a child canvas and fires before ours (bubble order), so
+        // toggling handleScroll/handleScale at mousedown time is too late to
+        // stop that drag from starting.
+        chart.applyOptions({ handleScroll: !edge, handleScale: !edge })
+        return
+      }
+      const { boxIndex, edge } = boxEdgeDragRef.current
+      const boxes = quartileBoxesRef.current.slice()
+      const box = { ...boxes[boxIndex] }
+
+      if (edge === 'right') {
+        const iso = xToIso(x)
+        if (iso == null || iso <= box.left_date) return
+        box.right_date = iso
+      } else {
+        const price = series.coordinateToPrice(y)
+        if (price == null) return
+        if (edge === 'hi') {
+          box.price_hi = Math.max(price, box.price_lo + 0.0001)
+        } else {
+          box.price_lo = Math.min(price, box.price_hi - 0.0001)
+        }
+      }
+
+      boxes[boxIndex] = box
+      quartileBoxesRef.current = boxes
+      primitive.setBoxes(boxes)
+    }
+
+    const handleMouseDown = (e: MouseEvent) => {
+      const { x, y } = getRelativeXY(e)
+      const edge = primitive.findEdgeAt(x, y)
+      if (!edge) return
+      boxEdgeDragRef.current = edge
+      chart.applyOptions({ handleScroll: false, handleScale: false })
+      e.preventDefault()
+      e.stopPropagation()
+    }
+
+    const handleMouseUp = () => {
+      const drag = boxEdgeDragRef.current
+      if (!drag) return
+      boxEdgeDragRef.current = null
+      chart.applyOptions({ handleScroll: true, handleScale: true })
+      const box = quartileBoxesRef.current[drag.boxIndex]
+      api
+        .saveBoxOverride(sessionId, symbol, {
+          trade_id: tradeId,
+          mode,
+          box_index: box.box_index,
+          price_lo: box.price_lo,
+          price_hi: box.price_hi,
+          right_date: box.right_date,
+        })
+        .catch(console.error)
+    }
+
+    container.addEventListener('mousemove', handleMouseMove)
+    container.addEventListener('mousedown', handleMouseDown)
+    window.addEventListener('mouseup', handleMouseUp)
+
+    return () => {
+      container.removeEventListener('mousemove', handleMouseMove)
+      container.removeEventListener('mousedown', handleMouseDown)
+      window.removeEventListener('mouseup', handleMouseUp)
+      container.style.cursor = ''
+      if (boxEdgeDragRef.current) {
+        chart.applyOptions({ handleScroll: true, handleScale: true })
+      }
+      boxEdgeDragRef.current = null
+    }
+  }, [data, drawPriceRange, sessionId, symbol, tradeId, mode])
 
   return <div ref={containerRef} className="w-full h-full" />
 })
