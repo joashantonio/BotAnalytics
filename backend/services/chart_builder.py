@@ -3,7 +3,7 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 
-from .market_data import fetch_wide, get_company_name, exec_scale_factors
+from .market_data import fetch_wide, get_company_name, snapped_exec_scale_factor
 from .psar import compute_psar, compute_chart_window, wide_trend_block, get_quartile
 from . import ma10 as ma10_mod
 from . import ma200 as ma200_mod
@@ -41,17 +41,18 @@ def _normalize_orders_to_candles(ticker: str, orders: list[dict], df_wide: "pd.D
     booked at 2x the post-split candle scale, so we divide those by 2. Returns a
     shallow copy per rescaled order so the in-memory trade store is untouched;
     every consumer below (markers, avg buy/sell, realized P/L, quartile boxes)
-    then reads the corrected price uniformly. Other tickers pass through as-is."""
-    factors = exec_scale_factors(ticker, df_wide, _ref_points_from_orders(orders))
-    if not factors:
-        return orders
+    then reads the corrected price uniformly. Other tickers pass through as-is.
+
+    Rescale uses the candle the chart snaps each fill to (searchsorted), not an
+    exact-date band — a fill on a non-trading day still snaps to a candle, so a
+    date-keyed lookup would miss it and leave avg/P&L at the raw 2x price."""
     out = []
     for o in orders:
         ep = o.get("exec_price")
         if ep is None:
             out.append(o)
             continue
-        f = factors.get(_order_exec_date(o).strftime("%Y-%m-%d"), 1.0)
+        f = snapped_exec_scale_factor(ticker, df_wide, _order_exec_date(o), float(ep))
         if f == 1.0:
             out.append(o)
         else:
@@ -62,20 +63,12 @@ def _normalize_orders_to_candles(ticker: str, orders: list[dict], df_wide: "pd.D
 
 def _rescale_rel_to_candles(ticker: str, rel: list[tuple], df_wide: "pd.DataFrame") -> list[tuple]:
     """Analytics analogue of _normalize_orders_to_candles. `rel` is a list of
-    (exec_date, trade_id, order) — rescale each order's exec_price to fit its
-    candle (8230.SR only). Returns copies so the trade store is untouched."""
-    ref_points = [
-        (ed.strftime("%Y-%m-%d"), float(o["exec_price"]))
-        for ed, _tid, o in rel
-        if o.get("exec_price") is not None
-    ]
-    factors = exec_scale_factors(ticker, df_wide, ref_points)
-    if not factors:
-        return rel
+    (exec_date, trade_id, order) — rescale each order's exec_price to fit the
+    candle it snaps to (8230.SR only). Returns copies so the store is untouched."""
     out = []
     for ed, tid, o in rel:
         ep = o.get("exec_price")
-        f = factors.get(ed.strftime("%Y-%m-%d"), 1.0) if ep is not None else 1.0
+        f = snapped_exec_scale_factor(ticker, df_wide, ed, float(ep)) if ep is not None else 1.0
         if f == 1.0:
             out.append((ed, tid, o))
         else:

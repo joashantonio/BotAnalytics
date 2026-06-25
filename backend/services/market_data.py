@@ -3,6 +3,7 @@ import logging
 import os
 from datetime import timedelta
 
+import numpy as np
 import pandas as pd
 import yfinance as yf
 
@@ -122,35 +123,34 @@ def _exec_scale_factor(price: float, lo: float, hi: float, allow_half: bool) -> 
     return None
 
 
-def exec_scale_factors(
-    ticker: str, df: pd.DataFrame, ref_points: "list[tuple[str, float]] | None"
-) -> "dict[str, float]":
-    """Per-execution-date scale factor to apply to that date's exec price so it
-    fits its candle. 1.0 = already fits, 0.5 = only fits when halved (8230.SR
-    special case only). Dates that can't be checked (no candle, non-positive
-    band) get no entry. Empty when there's nothing to validate against."""
-    factors: dict[str, float] = {}
-    if not ref_points or df.empty or "Low" not in df.columns or "High" not in df.columns:
-        return factors
-    allow_half = ticker in HALF_SCALE_TICKERS
-    idx = [d.strftime("%Y-%m-%d") for d in df.index]
-    lows = df["Low"].values.astype(float)
-    highs = df["High"].values.astype(float)
-    band = {idx[i]: (float(lows[i]), float(highs[i])) for i in range(len(idx))}
+def snapped_exec_scale_factor(
+    ticker: str, df: pd.DataFrame, exec_date: "pd.Timestamp", price: float
+) -> float:
+    """Scale factor for one fill, matched to the candle the chart actually snaps
+    it to (np.searchsorted into df.index), not an exact-date band lookup.
 
-    for date_str, price in ref_points:
-        if price is None or price <= 0:
-            continue
-        lh = band.get(date_str)
-        if lh is None:
-            continue
-        lo, hi = lh
-        if lo <= 0 or hi <= 0:
-            continue
-        f = _exec_scale_factor(price, lo, hi, allow_half)
-        if f is not None:
-            factors[date_str] = f
-    return factors
+    A fill on a non-trading day (holiday) has no exact-date candle; the chart
+    still draws its marker on the nearest candle, so the rescale must use that
+    same candle — otherwise the marker is halved but the avg/P&L keeps the raw
+    2x price and the Avg Buy line floats above every buy. Returns 1.0 (no
+    rescale) for non-8230 tickers, empty df, or when neither raw nor /2 fits."""
+    if (
+        ticker not in HALF_SCALE_TICKERS
+        or df.empty
+        or price is None
+        or price <= 0
+        or "Low" not in df.columns
+        or "High" not in df.columns
+    ):
+        return 1.0
+    i = int(np.searchsorted(df.index, exec_date, side="left"))
+    i = max(0, min(i, len(df) - 1))
+    lo = float(df["Low"].values[i])
+    hi = float(df["High"].values[i])
+    if lo <= 0 or hi <= 0:
+        return 1.0
+    f = _exec_scale_factor(price, lo, hi, allow_half=True)
+    return f if f is not None else 1.0
 
 
 def _execs_match_candles(

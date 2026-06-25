@@ -91,7 +91,7 @@ async def get_correct_executions(
     # are naturally missed, not served. mode_part keys the cache per indicator
     # (psar/ma10/ma200) so switching mode doesn't serve another mode's rows.
     mode_part = "" if mode == "psar" else f"::{mode}"
-    scope = f"__correct_exec__v8__{mode_part}:{from_date or ''}:{to_date or ''}"
+    scope = f"__correct_exec__v9__{mode_part}:{from_date or ''}:{to_date or ''}"
     cached = get_analytics(session_id, scope, suffix)
     if cached is not None:
         return cached
@@ -168,7 +168,7 @@ async def get_chart_endpoint(
     # Always version the key (incl. PSAR). Previously PSAR with no range cached
     # under a bare suffix with no version, so payload-shape changes (e.g. adding
     # bot_type) were never cache-busted and stale-shaped rows kept being served.
-    cache_suffix = f"{suffix}::{mode}::v24::{orders_hash}{range_part}{today_part}"
+    cache_suffix = f"{suffix}::{mode}::v25::{orders_hash}{range_part}{today_part}"
 
     cached = get_chart(session_id, trade_id, symbol, cache_suffix)
     if cached is not None:
